@@ -4,14 +4,26 @@
 
 import { createTask, pollTaskStatus, downloadCSV, downloadBibTeX, fetchSources } from '../api/client.js';
 import { historyManager } from '../utils/history.js';
+import { getPdfUrl } from '../utils/pdf-sort.js';
+import {
+  defaultSortDirection,
+  getAuthorsString,
+  getImpactFactorValue,
+  getJournalName,
+  getRelevanceScoreValue,
+  sortPapers as sortPaperRows,
+} from '../utils/paper-sort.js';
 import { router, renderHistoryList, escapeHtml } from '../main.js';
 
 export class HomePage {
   constructor() {
     this.currentTaskId = null;
     this.currentPapers = [];
-    this.currentSortColumn = 'if_score';
+    this.currentSortMode = 'relevance';
+    this.currentSortColumn = 'relevance_score';
     this.currentSortDirection = 'desc';
+    this.initialSortColumn = 'relevance_score';
+    this.initialSortDirection = 'desc';
   }
 
   render() {
@@ -23,14 +35,11 @@ export class HomePage {
       <header class="header">
         <div class="container header-container">
           <button id="history-toggle" class="btn-history" aria-label="查询历史">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
+            <i class="bi bi-clock-history"></i>
             <span>历史记录</span>
           </button>
-          <a href="/" class="header-logo">RustScholar</a>
-          <a href="/docs" class="header-link">API 文档</a>
+          <a href="/" class="header-logo">ScholarLens</a>
+          <a href="/docs" class="header-link"><i class="bi bi-file-earmark-text"></i> API 文档</a>
         </div>
       </header>
 
@@ -42,8 +51,16 @@ export class HomePage {
           <div class="hero-square"></div>
         </div>
         <div class="container">
-          <h1 class="hero-title">RustScholar</h1>
+          <div class="hero-title-row">
+            <i class="bi bi-journal-richtext"></i>
+            <h1 class="hero-title">ScholarLens</h1>
+          </div>
           <p class="hero-subtitle">学术文献智能搜索与筛选平台</p>
+          <div class="hero-badges">
+            <span class="badge badge-primary">AI 检索</span>
+            <span class="badge badge-info">多源聚合</span>
+            <span class="badge badge-success">文献筛选</span>
+          </div>
         </div>
       </section>
 
@@ -51,7 +68,13 @@ export class HomePage {
       <section class="search-section">
         <div class="container">
           <div class="search-card">
-            <h2 class="section-title">开始搜索</h2>
+            <div class="section-heading">
+              <div class="section-icon"><i class="bi bi-search"></i></div>
+              <div>
+                <h2 class="section-title">开始搜索</h2>
+                <p class="section-description">输入关键词与筛选条件，创建后台文献检索任务。</p>
+              </div>
+            </div>
             
             <form id="search-form" class="search-form">
               <!-- Keyword -->
@@ -124,9 +147,7 @@ export class HomePage {
               <details class="optional-filters">
                 <summary class="filters-toggle">
                   <span>更多筛选条件</span>
-                  <svg class="toggle-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
+                  <i class="bi bi-chevron-down toggle-icon"></i>
                 </summary>
                 <div class="filters-content">
                   <div class="form-row">
@@ -153,14 +174,30 @@ export class HomePage {
                       </select>
                     </div>
                   </div>
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label for="sort_by" class="form-label">排序方式</label>
+                      <select id="sort_by" name="sort_by" class="form-input">
+                        <option value="relevance" selected>相关性排序（推荐）</option>
+                        <option value="impact_factor">影响因子排序</option>
+                      </select>
+                      <p class="form-hint">相关性会综合关键词、研究方向、标题和摘要进行排序。</p>
+                    </div>
+                    <div class="form-group">
+                      <label for="pdf_sort" class="form-label">PDF 排序</label>
+                      <select id="pdf_sort" name="pdf_sort" class="form-input">
+                        <option value="">默认排序</option>
+                        <option value="pdf_first">有 PDF 优先</option>
+                        <option value="pdf_last">无 PDF 优先</option>
+                      </select>
+                      <p class="form-hint">后端返回和 CSV 保存会按 PDF 可用性排序；结果表也可点击 PDF 列切换。</p>
+                    </div>
+                  </div>
                 </div>
               </details>
               
               <button type="submit" id="submit-btn" class="btn btn-primary">
-                <svg class="btn-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <path d="m21 21-4.35-4.35"></path>
-                </svg>
+                <i class="bi bi-search btn-icon"></i>
                 <span>开始搜索</span>
               </button>
             </form>
@@ -173,7 +210,7 @@ export class HomePage {
         <div class="container">
           <div class="task-card">
             <div class="task-header">
-              <h2 class="section-title">任务进度</h2>
+              <h2 class="section-title"><i class="bi bi-activity"></i> 任务进度</h2>
               <span id="task-id" class="task-id"></span>
             </div>
             
@@ -202,7 +239,7 @@ export class HomePage {
         <div class="container">
           <div class="results-card">
             <div class="results-header">
-              <h2 class="section-title">搜索结果</h2>
+              <h2 class="section-title"><i class="bi bi-table"></i> 搜索结果</h2>
               <div class="results-stats">
                 <div class="stat-item">
                   <span class="stat-value" id="total-papers">0</span>
@@ -217,30 +254,17 @@ export class HomePage {
             
             <div class="download-buttons">
               <button id="download-csv" class="btn btn-secondary">
-                <svg class="btn-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                  <polyline points="7 10 12 15 17 10"></polyline>
-                  <line x1="12" y1="15" x2="12" y2="3"></line>
-                </svg>
+                <i class="bi bi-download btn-icon"></i>
                 <span>下载 CSV</span>
               </button>
               <button id="download-bibtex" class="btn btn-outline">
-                <svg class="btn-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                  <polyline points="14 2 14 8 20 8"></polyline>
-                  <line x1="16" y1="13" x2="8" y2="13"></line>
-                  <line x1="16" y1="17" x2="8" y2="17"></line>
-                </svg>
+                <i class="bi bi-file-earmark-text btn-icon"></i>
                 <span>导出 BibTeX</span>
               </button>
             </div>
             
             <div class="results-warning">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="12" y1="8" x2="12" y2="12"></line>
-                <line x1="12" y1="16" x2="12.01" y2="16"></line>
-              </svg>
+              <i class="bi bi-info-circle"></i>
               <span>搜索结果将在 10 分钟后自动清理，请及时下载所需数据</span>
             </div>
             
@@ -256,11 +280,7 @@ export class HomePage {
         <div class="container">
           <div class="error-card">
             <div class="error-icon">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="12" y1="8" x2="12" y2="12"></line>
-                <line x1="12" y1="16" x2="12.01" y2="16"></line>
-              </svg>
+              <i class="bi bi-exclamation-triangle"></i>
             </div>
             <h3 class="error-title">出错了</h3>
             <p id="error-message" class="error-message"></p>
@@ -292,9 +312,9 @@ export class HomePage {
         container.innerHTML = '<span class="source-loading">暂无可用检索源</span>';
         return;
       }
-      container.innerHTML = data.sources.map((s, i) => `
+      container.innerHTML = data.sources.map((s) => `
         <label class="source-chip">
-          <input type="checkbox" name="source_include" value="${s.id}"${i < 2 ? ' checked' : ''}>
+          <input type="checkbox" name="source_include" value="${s.id}" checked>
           <span>${s.label}</span>
         </label>
       `).join('');
@@ -312,6 +332,7 @@ export class HomePage {
 
     const formData = new FormData(document.getElementById('search-form'));
     const params = this.buildRequestParams(formData);
+    this.currentSortMode = params.sort_by || 'relevance';
 
     try {
       const response = await createTask(params);
@@ -395,13 +416,44 @@ export class HomePage {
     const sci = formData.get('sci');
     if (sci?.trim()) params.sci = sci;
 
+    const sortBy = formData.get('sort_by');
+    if (sortBy?.trim()) params.sort_by = sortBy.trim();
+
+    const pdfSort = formData.get('pdf_sort');
+    if (pdfSort === 'pdf_first') {
+      params.sort_by = 'has_pdf';
+      params.sort_order = 'desc';
+    } else if (pdfSort === 'pdf_last') {
+      params.sort_by = 'has_pdf';
+      params.sort_order = 'asc';
+    }
+
     const selectedSources = formData
       .getAll('source_include')
       .map((source) => String(source).trim())
       .filter(Boolean);
     if (selectedSources.length > 0) params.source_include = selectedSources;
 
+    this.setInitialSortFromParams(params);
+
     return params;
+  }
+
+  setInitialSortFromParams(params) {
+    if (params.sort_by === 'has_pdf') {
+      this.initialSortColumn = 'has_pdf';
+      this.initialSortDirection = params.sort_order === 'asc' ? 'asc' : 'desc';
+      return;
+    }
+
+    if (params.sort_by === 'impact_factor') {
+      this.initialSortColumn = 'if_score';
+      this.initialSortDirection = 'desc';
+      return;
+    }
+
+    this.initialSortColumn = 'relevance_score';
+    this.initialSortDirection = 'desc';
   }
 
   handleProgressUpdate(status) {
@@ -433,6 +485,7 @@ export class HomePage {
     indicator.classList.remove('status-queued', 'status-running', 'status-completed', 'status-failed');
 
     const statusMap = {
+      'pending': ['status-queued', '等待中'],
       'queued': ['status-queued', '等待中'],
       'running': ['status-running', '运行中'],
       'completed': ['status-completed', '已完成'],
@@ -463,8 +516,8 @@ export class HomePage {
     document.getElementById('filtered-papers').textContent = filtered;
 
     this.currentPapers = result.result?.data || [];
-    this.currentSortColumn = 'if_score';
-    this.currentSortDirection = 'desc';
+    this.currentSortColumn = this.initialSortColumn;
+    this.currentSortDirection = this.initialSortDirection;
     this.sortPapers();
     this.buildResultsTable();
 
@@ -474,38 +527,7 @@ export class HomePage {
   }
 
   sortPapers() {
-    this.currentPapers.sort((a, b) => {
-      let valA, valB;
-
-      switch (this.currentSortColumn) {
-        case 'title':
-          valA = (a.title || '').toLowerCase();
-          valB = (b.title || '').toLowerCase();
-          break;
-        case 'authors':
-          valA = this.getAuthorsString(a.authors).toLowerCase();
-          valB = this.getAuthorsString(b.authors).toLowerCase();
-          break;
-        case 'journal':
-          valA = (a.journal || a.venue || '').toLowerCase();
-          valB = (b.journal || b.venue || '').toLowerCase();
-          break;
-        case 'if_score':
-          valA = parseFloat(a.if_score) || 0;
-          valB = parseFloat(b.if_score) || 0;
-          break;
-        case 'year':
-          valA = parseInt(a.year, 10) || 0;
-          valB = parseInt(b.year, 10) || 0;
-          break;
-        default:
-          return 0;
-      }
-
-      if (valA < valB) return this.currentSortDirection === 'asc' ? -1 : 1;
-      if (valA > valB) return this.currentSortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
+    sortPaperRows(this.currentPapers, this.currentSortColumn, this.currentSortDirection);
   }
 
   handleSort(column) {
@@ -513,7 +535,7 @@ export class HomePage {
       this.currentSortDirection = this.currentSortDirection === 'asc' ? 'desc' : 'asc';
     } else {
       this.currentSortColumn = column;
-      this.currentSortDirection = (column === 'if_score' || column === 'year') ? 'desc' : 'asc';
+      this.currentSortDirection = defaultSortDirection(column);
     }
 
     this.sortPapers();
@@ -526,14 +548,11 @@ export class HomePage {
   }
 
   getAuthorsString(authors) {
-    if (!authors) return '';
-    if (typeof authors === 'string') return authors;
-    if (Array.isArray(authors)) return authors.join(', ');
-    return String(authors);
+    return getAuthorsString(authors);
   }
 
   getJournalName(paper) {
-    return paper.journal || paper.venue || paper.publicationVenue || paper.containerTitle || '';
+    return getJournalName(paper);
   }
 
   getImpactFactor(paper) {
@@ -545,8 +564,16 @@ export class HomePage {
   }
 
   getImpactFactorValue(paper) {
-    const ifValue = paper.if_score || paper.sciif || paper.impactFactor || paper.if || paper.IF;
-    return parseFloat(ifValue) || 0;
+    return getImpactFactorValue(paper);
+  }
+
+  getRelevanceScore(paper) {
+    const score = this.getRelevanceScoreValue(paper);
+    return score > 0 ? `${score}` : '-';
+  }
+
+  getRelevanceScoreValue(paper) {
+    return getRelevanceScoreValue(paper);
   }
 
   getJournalColor(ifScore) {
@@ -594,7 +621,12 @@ export class HomePage {
     const container = document.getElementById('results-table-container');
 
     if (!this.currentPapers || this.currentPapers.length === 0) {
-      container.innerHTML = '<p style="text-align: center; color: #6B7280; padding: 2rem;">暂无结果</p>';
+      container.innerHTML = `
+        <div class="empty-state">
+          <i class="bi bi-inboxes"></i>
+          <p>暂无结果</p>
+        </div>
+      `;
       return;
     }
 
@@ -608,14 +640,16 @@ export class HomePage {
           <th class="sortable" data-column="authors">作者${this.getSortIndicator('authors')}</th>
           <th class="sortable" data-column="year">年份${this.getSortIndicator('year')}</th>
           <th class="sortable" data-column="journal">期刊${this.getSortIndicator('journal')}</th>
+          <th class="sortable" data-column="relevance_score">相关性${this.getSortIndicator('relevance_score')}</th>
           <th class="sortable" data-column="if_score">IF${this.getSortIndicator('if_score')}</th>
-          <th>PDF</th>
+          <th class="sortable" data-column="has_pdf">PDF${this.getSortIndicator('has_pdf')}</th>
         </tr>
       </thead>
       <tbody>
         ${this.currentPapers.map(paper => {
       const ifScore = this.getImpactFactorValue(paper);
       const journalStyle = this.getJournalColor(ifScore);
+      const pdfUrl = getPdfUrl(paper);
       return `
           <tr>
             <td class="paper-title">
@@ -627,17 +661,12 @@ export class HomePage {
             <td>${escapeHtml(this.truncateAuthors(paper.authors))}</td>
             <td>${paper.year || '-'}</td>
             <td><span class="journal-tag" style="${journalStyle}">${escapeHtml(this.getJournalName(paper)) || '-'}</span></td>
+            <td class="relevance-value" title="${escapeHtml(paper.relevance_reason || '')}">${this.getRelevanceScore(paper)}</td>
             <td class="if-value">${this.getImpactFactor(paper)}</td>
             <td class="pdf-cell">
-              ${paper.pdf_url
-          ? `<a href="${escapeHtml(paper.pdf_url)}" target="_blank" rel="noopener" class="pdf-link" title="下载 PDF">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                      <polyline points="14 2 14 8 20 8"></polyline>
-                      <line x1="16" y1="13" x2="8" y2="13"></line>
-                      <line x1="16" y1="17" x2="8" y2="17"></line>
-                      <polyline points="10 9 9 9 8 9"></polyline>
-                    </svg>
+              ${pdfUrl
+          ? `<a href="${escapeHtml(pdfUrl)}" target="_blank" rel="noopener" class="pdf-link" title="下载 PDF">
+                    <i class="bi bi-file-earmark-pdf"></i>
                   </a>`
           : '<span class="pdf-none">-</span>'
         }
@@ -671,15 +700,12 @@ export class HomePage {
     const btn = document.getElementById('submit-btn');
     if (isLoading) {
       btn.disabled = true;
-      btn.innerHTML = '<span class="spinner"></span><span>搜索中...</span>';
+      btn.innerHTML = '<span class="spinner-border text-primary" aria-hidden="true"></span><span>搜索中...</span>';
       btn.classList.add('btn-loading');
     } else {
       btn.disabled = false;
       btn.innerHTML = `
-        <svg class="btn-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <circle cx="11" cy="11" r="8"></circle>
-          <path d="m21 21-4.35-4.35"></path>
-        </svg>
+        <i class="bi bi-search btn-icon"></i>
         <span>开始搜索</span>
       `;
       btn.classList.remove('btn-loading');

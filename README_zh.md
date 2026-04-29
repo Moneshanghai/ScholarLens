@@ -1,6 +1,6 @@
-﻿# Rscholar
+# ScholarLens
 
-Rscholar 是一个基于 Rust 的学术文献检索服务，支持异步任务执行、多源检索、元数据增强、期刊指标过滤，以及 CSV/BibTeX 导出。
+ScholarLens 是一个基于 Rust 的学术文献检索服务，支持异步任务执行、多源检索、元数据增强、期刊指标过滤，以及 CSV/BibTeX 导出。
 
 本文档已按当前代码实现更新。
 
@@ -21,6 +21,7 @@ Rscholar 是一个基于 Rust 的学术文献检索服务，支持异步任务�
 - 指标筛选：`sciif`、`jci`、`sci`
   - 预印本不会因为指标过滤被剔除
 - `content_help` 存在时可启用 LLM 相关阶段
+- 默认按相关性分数排序最终结果（`sort_by = "relevance"`）
 - 导出：
   - 任务 JSON 结果
   - `results.csv`
@@ -37,15 +38,16 @@ Rscholar 是一个基于 Rust 的学术文献检索服务，支持异步任务�
   - `source_include` 中有未知 source 会直接报错
 - 请求级 `enable_llm_filter` 已移除
   - 是否执行 LLM 相关性过滤由 pipeline 决定（如 `content_help`）
+- 默认输出顺序为相关性优先；如需保持影响因子优先，可传 `sort_by = "impact_factor"`。
 - 输出目录命名：
   - `output/{timestamp}_{keyword}`
 
 ## 运行模式
 
 - HTTP 服务模式（主模式）：
-  - `Rscholar server --port 3000 --serve-static front/dist`
+  - `ScholarLens server --port 3000 --serve-static front/dist`
 - CLI 搜索模式（辅助）：
-  - `Rscholar search ...`
+  - `ScholarLens search ...`
 
 ## 快速启动
 
@@ -100,6 +102,7 @@ Windows PowerShell：
 - `sci`
 - `llm_strict_filter`
 - `content_help`
+- `sort_by`（默认 `relevance`，也可传 `impact_factor`）
 - `source_include`
 - `source_exclude`
 
@@ -121,8 +124,9 @@ Windows PowerShell：
 7. 期刊指标查询与写回
 8. 指标筛选（`sciif/jci/sci`，预印本豁免）
 9. LLM 相关性筛选（`content_help` 非空时）
-10. 回退策略（严格/非严格）
-11. 保存 CSV、记录统计、完成任务
+10. 相关性打分与最终排序
+11. 回退策略（严格/非严格）
+12. 保存 CSV、记录统计、完成任务
 
 ## 项目结构
 

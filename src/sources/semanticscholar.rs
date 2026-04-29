@@ -10,11 +10,12 @@
 
 use crate::error::{GscholarError, Result};
 use crate::sources::rate_limiter;
+use crate::sources::retry::{next_rate_limit_delay, RateLimitRetryPolicy};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{debug, info, warn};
 use crate::traffic::GLOBAL_TRAFFIC;
+use tracing::{debug, info, warn};
 
 /// Semantic Scholar API base URL
 const SS_API_BASE: &str = "https://api.semanticscholar.org/graph/v1";
@@ -157,6 +158,10 @@ pub async fn batch_lookup(dois: &[String], api_key: Option<&str>) -> Result<Vec<
     Ok(all_results)
 }
 
+fn semantic_scholar_api_key_header(api_key: Option<&str>) -> Option<&str> {
+    api_key.map(str::trim).filter(|key| !key.is_empty())
+}
+
 /// Fetch a single batch of papers
 async fn fetch_batch(
     client: &Client,
@@ -179,12 +184,71 @@ async fn fetch_batch(
     let mut request = client.post(&url).json(&body);
 
     // Add API key header if provided
-    if let Some(key) = api_key {
+    if let Some(key) = semantic_scholar_api_key_header(api_key) {
         request = request.header("x-api-key", key);
     }
 
-    rate_limiter::semantic_scholar().acquire().await;
-    let response = request.send().await?;
+    let policy = RateLimitRetryPolicy::conservative();
+    let mut rate_limit_retries = 0u32;
+    let mut total_rate_limit_wait = Duration::ZERO;
+    let mut server_error_retries = 0u32;
+
+    let response = loop {
+        rate_limiter::semantic_scholar().acquire().await;
+        let resp = request
+            .try_clone()
+            .ok_or_else(|| {
+                GscholarError::Parse("Failed to clone Semantic Scholar batch request".to_string())
+            })?
+            .send()
+            .await?;
+        let status = resp.status();
+
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            rate_limit_retries += 1;
+            let headers = resp.headers().clone();
+            let error_text = resp.text().await.unwrap_or_default();
+            if let Some(delay) =
+                next_rate_limit_delay(&headers, rate_limit_retries, total_rate_limit_wait, policy)
+            {
+                total_rate_limit_wait += delay;
+                warn!(
+                    source = "semanticscholar",
+                    status = 429,
+                    attempt = rate_limit_retries,
+                    delay_secs = delay.as_secs_f64(),
+                    error = %error_text,
+                    "Semantic Scholar batch rate limited (429), retrying"
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            return Err(GscholarError::Api {
+                code: 429,
+                message: format!(
+                    "Semantic Scholar batch rate limited after {} retries",
+                    policy.max_retries
+                ),
+            });
+        }
+
+        if status.is_server_error() {
+            server_error_retries += 1;
+            if server_error_retries > 5 {
+                warn!(status = %status, "Semantic Scholar batch server error after 5 retries");
+                break resp;
+            }
+            warn!(
+                status = %status,
+                attempt = server_error_retries,
+                "Semantic Scholar batch server error, retrying in 2s"
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+
+        break resp;
+    };
     let status = response.status();
 
     if !status.is_success() {
@@ -345,26 +409,46 @@ pub async fn search_papers(
 
     debug!(url = %url, "Sending search request");
 
-    // Retry loop for rate limiting (429) and server errors (500)
-    // Exponential backoff for 429: 1s, 2s, 4s, 8s, 16s
-    // Max 5 retries for server errors to prevent infinite loops
+    // Retry loop for rate limiting (429) and server errors (500).
     let mut rate_limit_retries = 0u32;
+    let mut total_rate_limit_wait = Duration::ZERO;
     let mut server_error_retries = 0;
+    let policy = RateLimitRetryPolicy::conservative();
     let response = loop {
         let mut request = client.get(&url);
-        if let Some(key) = api_key {
+        if let Some(key) = semantic_scholar_api_key_header(api_key) {
             request = request.header("x-api-key", key);
         }
 
         rate_limiter::semantic_scholar().acquire().await;
         let resp = request.send().await?;
         let status = resp.status();
-        if status == 429 {
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             rate_limit_retries += 1;
-            let backoff_secs = 1u64 << rate_limit_retries.min(4); // 1, 2, 4, 8, 16 seconds
-            warn!("SS Rate limit (429), waiting {}s before retry (attempt {})...", backoff_secs, rate_limit_retries);
-            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-            continue;
+            let headers = resp.headers().clone();
+            let error_text = resp.text().await.unwrap_or_default();
+            if let Some(delay) =
+                next_rate_limit_delay(&headers, rate_limit_retries, total_rate_limit_wait, policy)
+            {
+                total_rate_limit_wait += delay;
+                warn!(
+                    source = "semanticscholar",
+                    status = 429,
+                    attempt = rate_limit_retries,
+                    delay_secs = delay.as_secs_f64(),
+                    error = %error_text,
+                    "Semantic Scholar search rate limited (429), retrying"
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            return Err(GscholarError::Api {
+                code: 429,
+                message: format!(
+                    "Semantic Scholar Search rate limited after {} retries",
+                    policy.max_retries
+                ),
+            });
         }
         if status == 500 || status == 502 || status == 503 {
             server_error_retries += 1;
@@ -461,5 +545,12 @@ mod tests {
         
         let chunk_size = (total + batch_count - 1) / batch_count;
         assert_eq!(chunk_size, 400); // ceil(1200/3) = 400
+    }
+
+    #[test]
+    fn test_api_key_header_is_only_added_when_configured() {
+        assert_eq!(semantic_scholar_api_key_header(Some("ss-key")), Some("ss-key"));
+        assert_eq!(semantic_scholar_api_key_header(Some("   ")), None);
+        assert_eq!(semantic_scholar_api_key_header(None), None);
     }
 }

@@ -3,7 +3,10 @@ use tracing::info;
 
 use super::PaperResult;
 
-pub(super) fn merge_search_results(ss_results: Vec<PaperResult>, oa_results: Vec<PaperResult>) -> Vec<PaperResult> {
+pub(super) fn merge_search_results(
+    ss_results: Vec<PaperResult>,
+    oa_results: Vec<PaperResult>,
+) -> Vec<PaperResult> {
     let mut doi_map: HashMap<String, PaperResult> = HashMap::new();
     let mut no_doi_results: Vec<PaperResult> = Vec::new();
 
@@ -19,8 +22,12 @@ pub(super) fn merge_search_results(ss_results: Vec<PaperResult>, oa_results: Vec
     for paper in oa_results {
         if paper.doi.is_empty() {
             let title_lower = paper.title.to_lowercase();
-            let exists = doi_map.values().any(|p| p.title.to_lowercase() == title_lower)
-                || no_doi_results.iter().any(|p| p.title.to_lowercase() == title_lower);
+            let exists = doi_map
+                .values()
+                .any(|p| p.title.to_lowercase() == title_lower)
+                || no_doi_results
+                    .iter()
+                    .any(|p| p.title.to_lowercase() == title_lower);
             if !exists {
                 no_doi_results.push(paper);
             }

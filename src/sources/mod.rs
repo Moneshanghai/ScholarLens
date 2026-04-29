@@ -14,6 +14,7 @@ pub mod crossref;
 pub mod openalex;
 pub mod pubmed;
 pub mod rate_limiter;
+pub(crate) mod retry;
 pub mod semanticscholar;
 pub mod xrxiv;
 

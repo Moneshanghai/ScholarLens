@@ -5,7 +5,10 @@
 
 use crate::db::{tasks as db_tasks, DbPool};
 use crate::error::{GscholarError, Result};
-use crate::server::config::{SearchArxivSection, SearchPubMedSection, SearchXRxivSection};
+use crate::server::config::{
+    SearchArxivSection, SearchOpenAlexSection, SearchPubMedSection, SearchSemanticScholarSection,
+    SearchXRxivSection,
+};
 use crate::server::task::{TaskResult, TaskStore};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -19,6 +22,7 @@ mod keyword_expansion;
 mod keyword_translation;
 mod llm_filter;
 mod merge;
+mod relevance;
 mod search_stage;
 
 use analytics::log_search_analytics;
@@ -28,6 +32,7 @@ use keyword_expansion::run_keyword_expansion;
 use keyword_translation::run_keyword_translation;
 use llm_filter::apply_llm_relevance_filter;
 use merge::merge_search_results;
+use relevance::SortBy;
 use search_stage::{build_openalex_or_query, run_parallel_search};
 
 /// Pipeline request from API
@@ -48,6 +53,10 @@ pub struct PipelineRequest {
     pub sci: Option<String>,
     /// Strict mode: if true, do NOT fallback to unfiltered results when LLM filters all papers out
     pub llm_strict_filter: Option<bool>,
+    /// Sort mode for final results. Defaults to relevance.
+    pub sort_by: Option<String>,
+    /// Optional sort order for PDF sorting. Supported: "asc" or "desc".
+    pub sort_order: Option<String>,
     /// Content help: User's description of desired research direction/focus.
     /// Used for BOTH keyword expansion and LLM relevance filtering.
     /// Example: "我需要关于机器学习预测岩石强度的论文，重点关注实时方法"
@@ -62,7 +71,9 @@ impl PipelineRequest {
     /// Validate the request
     pub fn validate(&self) -> Result<()> {
         if self.keyword.trim().is_empty() {
-            return Err(GscholarError::Validation("Missing required parameter 'keyword' in JSON body.".to_string()));
+            return Err(GscholarError::Validation(
+                "Missing required parameter 'keyword' in JSON body.".to_string(),
+            ));
         }
         Ok(())
     }
@@ -77,6 +88,7 @@ pub struct PipelineConfig {
     pub ss_limit: usize,
     pub oa_limit: usize,
     pub enabled_sources: Vec<String>,
+    pub semanticscholar: SearchSemanticScholarSection,
     pub arxiv: SearchArxivSection,
     pub pubmed: SearchPubMedSection,
     pub xrxiv: SearchXRxivSection,
@@ -85,8 +97,9 @@ pub struct PipelineConfig {
     pub sciif: Option<f64>,
     pub jci: Option<f64>,
     pub sci: Option<String>,
-    
+
     pub llm_strict_filter: bool,
+    sort_by: SortBy,
     /// User's description for keyword expansion and relevance filtering
     pub content_help: Option<String>,
     pub output_dir: PathBuf,
@@ -104,6 +117,8 @@ impl PipelineConfig {
         server_ss_limit: usize,
         server_oa_limit: usize,
         server_enabled_sources: &[String],
+        server_openalex: &SearchOpenAlexSection,
+        server_semanticscholar: &SearchSemanticScholarSection,
         server_arxiv: &SearchArxivSection,
         server_pubmed: &SearchPubMedSection,
         server_xrxiv: &SearchXRxivSection,
@@ -122,12 +137,10 @@ impl PipelineConfig {
 
         let easyscholar_keys = server_easyscholar_keys.to_vec();
 
-        let filter_active = req.sciif.is_some()
-            || req.jci.is_some()
-            || req.sci.is_some();
-        
+        let filter_active = req.sciif.is_some() || req.jci.is_some() || req.sci.is_some();
+
         if filter_active && easyscholar_keys.is_empty() {
-             return Err(crate::error::GscholarError::Validation(
+            return Err(crate::error::GscholarError::Validation(
                  "Ranking filters (sciif/jci/sci) require EasyScholar access. Please configure server-side easyscholar.keys.".to_string()
              ));
         }
@@ -137,14 +150,18 @@ impl PipelineConfig {
             req.source_exclude.clone(),
             server_enabled_sources,
         )?;
+        let sort_by = resolve_sort_by(req.sort_by.as_deref(), req.sort_order.as_deref())?;
 
         Ok(Self {
             keyword: req.keyword,
             ylo: req.ylo.or(server_default_ylo),
             enable_crossref: req.enable_crossref.unwrap_or(server_enable_crossref),
-            ss_limit: server_ss_limit.clamp(1, 100),
-            oa_limit: server_oa_limit.clamp(1, 200),
+            ss_limit: source_limit_or_legacy(server_semanticscholar.max_results, server_ss_limit)
+                .clamp(1, 100),
+            oa_limit: source_limit_or_legacy(server_openalex.max_results, server_oa_limit)
+                .clamp(1, 200),
             enabled_sources,
+            semanticscholar: server_semanticscholar.clone(),
             arxiv: server_arxiv.clone(),
             pubmed: server_pubmed.clone(),
             xrxiv: server_xrxiv.clone(),
@@ -153,12 +170,49 @@ impl PipelineConfig {
             sciif: req.sciif,
             jci: req.jci,
             sci: req.sci,
-            
+
             llm_strict_filter: req.llm_strict_filter.unwrap_or(server_llm_strict_filter),
+            sort_by,
             content_help: req.content_help,
             output_dir,
         })
     }
+}
+
+fn source_limit_or_legacy(source_max_results: usize, legacy_limit: usize) -> usize {
+    if source_max_results > 0 {
+        source_max_results
+    } else {
+        legacy_limit
+    }
+}
+
+fn non_empty_api_key(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn resolve_sort_by(sort_by: Option<&str>, sort_order: Option<&str>) -> Result<SortBy> {
+    let mut resolved = SortBy::from_request(sort_by)?;
+    if matches!(resolved, SortBy::HasPdfDesc) {
+        if let Some(order) = sort_order.map(str::trim).filter(|s| !s.is_empty()) {
+            resolved = match order.to_lowercase().as_str() {
+                "asc" | "ascending" => SortBy::HasPdfAsc,
+                "desc" | "descending" => SortBy::HasPdfDesc,
+                _ => {
+                    return Err(GscholarError::Validation(format!(
+                        "Unsupported sort_order '{}'. Supported values: asc, desc",
+                        order
+                    )))
+                }
+            };
+        }
+    }
+    Ok(resolved)
 }
 
 fn normalize_source_name(value: &str) -> String {
@@ -227,7 +281,7 @@ fn resolve_enabled_sources(
 }
 
 /// Progress tracker with throttling for DB writes
-/// 
+///
 /// Writes to memory on every update, but throttles DB writes to avoid
 /// SQLite write lock contention. DB writes occur when:
 /// - Progress changes by >= 5%
@@ -263,7 +317,7 @@ impl ProgressTracker {
         // Throttle DB writes: Δ >= 5% OR Δt >= 2s
         let delta_percent = percent.saturating_sub(self.last_db_percent);
         let delta_time = self.last_db_time.elapsed().as_secs();
-        
+
         if delta_percent >= 5 || delta_time >= 2 {
             self.write_progress_to_db(step, percent).await;
         }
@@ -275,7 +329,7 @@ impl ProgressTracker {
         self.task_store.update(&self.task_id, |t| {
             t.update_progress(step, percent);
         });
-        
+
         // Force DB write
         self.write_progress_to_db(step, percent).await;
     }
@@ -287,9 +341,12 @@ impl ProgressTracker {
                 Ok(conn) => {
                     let task_id = self.task_id.clone();
                     let step_owned = step.to_string();
-                    match conn.interact(move |conn| {
-                        db_tasks::update_progress(conn, &task_id, &step_owned, percent)
-                    }).await {
+                    match conn
+                        .interact(move |conn| {
+                            db_tasks::update_progress(conn, &task_id, &step_owned, percent)
+                        })
+                        .await
+                    {
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => {
                             warn!(
@@ -329,7 +386,8 @@ impl ProgressTracker {
     /// Complete the task - updates both memory and DB immediately
     pub async fn complete(&self, result: TaskResult) {
         // Update memory
-        self.task_store.update(&self.task_id, |t| t.complete(result.clone()));
+        self.task_store
+            .update(&self.task_id, |t| t.complete(result.clone()));
 
         // Persist to DB
         if let Some(ref db) = self.db {
@@ -342,9 +400,10 @@ impl ProgressTracker {
                         data: result.data.clone(),
                         csv_path: result.csv_path.clone(),
                     };
-                    match conn.interact(move |conn| {
-                        db_tasks::complete(conn, &task_id, &db_result)
-                    }).await {
+                    match conn
+                        .interact(move |conn| db_tasks::complete(conn, &task_id, &db_result))
+                        .await
+                    {
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => {
                             warn!(
@@ -376,7 +435,8 @@ impl ProgressTracker {
     /// Fail the task - updates both memory and DB immediately
     pub async fn fail(&self, error: &str) {
         // Update memory
-        self.task_store.update(&self.task_id, |t| t.fail(error.to_string()));
+        self.task_store
+            .update(&self.task_id, |t| t.fail(error.to_string()));
 
         // Persist to DB
         if let Some(ref db) = self.db {
@@ -384,9 +444,10 @@ impl ProgressTracker {
                 Ok(conn) => {
                     let task_id = self.task_id.clone();
                     let error_owned = error.to_string();
-                    match conn.interact(move |conn| {
-                        db_tasks::fail(conn, &task_id, &error_owned)
-                    }).await {
+                    match conn
+                        .interact(move |conn| db_tasks::fail(conn, &task_id, &error_owned))
+                        .await
+                    {
                         Ok(Ok(())) => {}
                         Ok(Err(db_error)) => {
                             warn!(
@@ -422,7 +483,7 @@ impl ProgressTracker {
 }
 
 /// Spawn pipeline execution as a background task
-/// 
+///
 /// Uses ProgressTracker for throttled DB progress updates.
 /// On completion/failure, persists result to DB and removes task from memory cache
 /// after a delay (allowing immediate result retrieval).
@@ -436,13 +497,9 @@ pub fn spawn_pipeline(
 ) {
     tokio::spawn(async move {
         info!(task_id = %task_id, keyword = %config.keyword, "Starting pipeline execution");
-        
+
         // Create progress tracker with throttled DB writes
-        let mut tracker = ProgressTracker::new(
-            task_id.clone(),
-            task_store.clone(),
-            db.clone(),
-        );
+        let mut tracker = ProgressTracker::new(task_id.clone(), task_store.clone(), db.clone());
 
         // Force initial progress to DB (status transition: pending -> running)
         tracker.force_update("Starting search", 5).await;
@@ -489,7 +546,8 @@ async fn execute_pipeline(
 
     // Stage 0: Keyword Translation (if non-English input and LLM available)
     // All downstream search/expansion uses the translated English keyword.
-    let search_keyword = run_keyword_translation(tracker, &config.keyword, llm_filter.as_ref()).await;
+    let search_keyword =
+        run_keyword_translation(tracker, &config.keyword, llm_filter.as_ref()).await;
     info!(
         task_id = %task_id,
         original_keyword = %config.keyword,
@@ -503,16 +561,16 @@ async fn execute_pipeline(
 
     // Stage 1: Search enabled sources in parallel.
     tracker.update("Searching papers", 10).await;
-    
+
     // Build OpenAlex OR query from original + expanded terms.
     let oa_query = build_openalex_or_query(&search_keyword, expanded_keywords);
-    
+
     // Parallel search
     let keyword = search_keyword.clone();
     let ylo = config.ylo;
     let ss_limit = config.ss_limit;
     let oa_limit = config.oa_limit;
-    
+
     let stage_result = run_parallel_search(
         &task_id,
         &keyword,
@@ -521,6 +579,7 @@ async fn execute_pipeline(
         ss_limit,
         oa_limit,
         &config.enabled_sources,
+        &config.semanticscholar,
         &config.arxiv,
         &config.pubmed,
         &config.xrxiv,
@@ -532,7 +591,7 @@ async fn execute_pipeline(
     if !stage_result.additional_results.is_empty() {
         append_additional_results_dedup(&mut search_results, stage_result.additional_results);
     }
-    
+
     let total_papers = search_results.len();
     info!(task_id = %task_id, papers = total_papers, "Search merge completed");
 
@@ -563,19 +622,19 @@ async fn execute_pipeline(
         );
     }
 
-
     // Stage 2: Crossref enrichment (optional, ONLY for papers missing DOI)
     tracker.update("Enriching metadata", 30).await;
-    
+
     let mut enriched_results = search_results;
     if config.enable_crossref && !enriched_results.is_empty() {
         // Find papers that are missing DOI (fallback mode)
-        let papers_needing_doi: Vec<(usize, String)> = enriched_results.iter()
+        let papers_needing_doi: Vec<(usize, String)> = enriched_results
+            .iter()
             .enumerate()
             .filter(|(_, p)| p.doi.is_empty())
             .map(|(i, p)| (i, p.title.clone()))
             .collect();
-        
+
         let missing_count = papers_needing_doi.len();
         if missing_count > 0 {
             info!(
@@ -583,12 +642,14 @@ async fn execute_pipeline(
                 missing_doi = missing_count,
                 "Crossref lookup for papers missing DOI"
             );
-            
+
             // Use CrossrefClient for batch lookup by title (only for missing DOIs)
-            if let Ok(client) = crossref::CrossrefClient::new(5) {  // Increase concurrency to 5
-                let titles: Vec<String> = papers_needing_doi.iter().map(|(_, t)| t.clone()).collect();
+            if let Ok(client) = crossref::CrossrefClient::new(5) {
+                // Increase concurrency to 5
+                let titles: Vec<String> =
+                    papers_needing_doi.iter().map(|(_, t)| t.clone()).collect();
                 let crossref_results = client.lookup_batch(&titles).await;
-                
+
                 // Apply results back to the original papers
                 for ((idx, _), cr_opt) in papers_needing_doi.iter().zip(crossref_results.iter()) {
                     if let Some(cr) = cr_opt {
@@ -603,27 +664,39 @@ async fn execute_pipeline(
                 }
             }
         } else {
-            info!(total = enriched_results.len(), "All papers have DOI, skipping Crossref");
+            info!(
+                total = enriched_results.len(),
+                "All papers have DOI, skipping Crossref"
+            );
         }
     }
 
     // Stage 3: Semantic Scholar abstracts
     tracker.update("Fetching abstracts", 50).await;
-    
-    let dois: Vec<String> = enriched_results.iter()
-        .filter_map(|p| if p.doi.is_empty() { None } else { Some(p.doi.clone()) })
+
+    let dois: Vec<String> = enriched_results
+        .iter()
+        .filter_map(|p| {
+            if p.doi.is_empty() {
+                None
+            } else {
+                Some(p.doi.clone())
+            }
+        })
         .collect();
-    
+
     if !dois.is_empty() {
-        match semanticscholar::batch_lookup(&dois, None).await {
+        let semantic_api_key = non_empty_api_key(&config.semanticscholar.api_key);
+        match semanticscholar::batch_lookup(&dois, semantic_api_key).await {
             Ok(ss_results) => {
-                // SemanticScholarResult: title, doi (String), ss_abstract, oa_pdf_url, ... 
+                // SemanticScholarResult: title, doi (String), ss_abstract, oa_pdf_url, ...
                 for paper in &mut enriched_results {
                     if !paper.doi.is_empty() {
                         // Match by DOI (case-insensitive)
-                        if let Some(ss) = ss_results.iter().find(|s| {
-                            s.doi.eq_ignore_ascii_case(&paper.doi)
-                        }) {
+                        if let Some(ss) = ss_results
+                            .iter()
+                            .find(|s| s.doi.eq_ignore_ascii_case(&paper.doi))
+                        {
                             if paper.abstract_text.is_empty() && !ss.ss_abstract.is_empty() {
                                 paper.abstract_text = ss.ss_abstract.clone();
                             }
@@ -643,12 +716,12 @@ async fn execute_pipeline(
 
     // Stage 4: Skip rerank for API (simplified implementation)
     tracker.update("Processing", 70).await;
-    
+
     let mut final_results = enriched_results;
 
     // Stage 5: EasyScholar rankings with persistent in-process service
     tracker.update("Adding journal rankings", 85).await;
-    
+
     if !config.easyscholar_keys.is_empty() {
         let venues: Vec<String> = final_results
             .iter()
@@ -734,7 +807,6 @@ async fn execute_pipeline(
             }
             keep
         });
-
     }
 
     // Stage 5: LLM Relevance Filter
@@ -762,11 +834,9 @@ async fn execute_pipeline(
         .await;
     }
 
-    // Save results to CSV
-    tracker.update("Saving results", 95).await;
-    
     // If filtered results are empty, use unfiltered results as fallback
-    let (results_to_save, is_fallback) = select_results_with_fallback(
+    let filtered_papers = final_results.len();
+    let (mut results_to_save, is_fallback) = select_results_with_fallback(
         &task_id,
         &config.keyword,
         llm_filter_applied,
@@ -774,13 +844,34 @@ async fn execute_pipeline(
         &final_results,
         &unfiltered_results,
     );
-    
+
+    score_results_for_sorting(
+        tracker,
+        &task_id,
+        &keyword,
+        config.content_help.as_deref(),
+        config.sort_by,
+        llm_filter.as_ref(),
+        &mut results_to_save,
+    )
+    .await;
+    relevance::sort_papers(&mut results_to_save, config.sort_by);
+
+    // Save results to CSV
+    tracker.update("Saving results", 95).await;
+
     let csv_path = config.output_dir.join("results.csv");
     save_results_csv(&csv_path, &results_to_save)?;
 
-    let filtered_papers = final_results.len();
-    log_search_analytics(db, &task_id, &config.keyword, filtered_papers, &final_results).await;
-    
+    log_search_analytics(
+        db,
+        &task_id,
+        &config.keyword,
+        filtered_papers,
+        &final_results,
+    )
+    .await;
+
     info!(
         task_id = %task_id,
         total = total_papers,
@@ -810,6 +901,88 @@ async fn execute_pipeline(
     })
 }
 
+async fn score_results_for_sorting(
+    tracker: &mut ProgressTracker,
+    task_id: &str,
+    keyword: &str,
+    content_help: Option<&str>,
+    sort_by: SortBy,
+    llm_filter: Option<&std::sync::Arc<crate::llm::LlmRelevanceFilter>>,
+    papers: &mut [PaperResult],
+) {
+    if papers.is_empty() {
+        return;
+    }
+
+    tracker.update("Scoring relevance", 92).await;
+    let content_help = content_help.filter(|s| !s.trim().is_empty());
+
+    if matches!(sort_by, SortBy::Relevance) {
+        if let Some(llm) = llm_filter {
+            let paper_infos: Vec<crate::llm::PaperInfo> = papers
+                .iter()
+                .map(|p| crate::llm::PaperInfo {
+                    title: p.title.clone(),
+                    abstract_text: p.abstract_text.clone(),
+                    venue: p.venue.clone(),
+                })
+                .collect();
+
+            let score_results = llm
+                .batch_score_relevance(keyword, paper_infos, content_help)
+                .await;
+
+            let mut llm_successes = 0usize;
+            for (idx, paper) in papers.iter_mut().enumerate() {
+                match score_results.get(idx) {
+                    Some(Ok(score)) => {
+                        paper.relevance_score = Some(score.score);
+                        paper.relevance_reason = score
+                            .reason
+                            .clone()
+                            .or_else(|| Some("LLM semantic relevance score.".to_string()));
+                        llm_successes += 1;
+                    }
+                    Some(Err(error)) => {
+                        let local = relevance::local_relevance_score(keyword, content_help, paper);
+                        paper.relevance_score = Some(local.score);
+                        paper.relevance_reason =
+                            Some(format!("{} LLM scoring failed: {}.", local.reason, error));
+                    }
+                    None => {
+                        let local = relevance::local_relevance_score(keyword, content_help, paper);
+                        paper.relevance_score = Some(local.score);
+                        paper.relevance_reason = Some(format!(
+                            "{} LLM scoring returned no result for this paper.",
+                            local.reason
+                        ));
+                    }
+                }
+            }
+
+            info!(
+                task_id = %task_id,
+                papers = papers.len(),
+                llm_successes = llm_successes,
+                "Relevance scores assigned"
+            );
+            return;
+        }
+    }
+
+    for paper in papers.iter_mut() {
+        let local = relevance::local_relevance_score(keyword, content_help, paper);
+        paper.relevance_score = Some(local.score);
+        paper.relevance_reason = Some(local.reason);
+    }
+
+    info!(
+        task_id = %task_id,
+        papers = papers.len(),
+        "Local fallback relevance scores assigned"
+    );
+}
+
 /// Internal paper result structure (for JSON API response)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct PaperResult {
@@ -828,6 +1001,10 @@ struct PaperResult {
     jci_score: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sci_partition: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relevance_score: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relevance_reason: Option<String>,
     /// Internal: tracks which search source provided this paper (not serialized to JSON)
     #[serde(skip)]
     source: String,
@@ -841,10 +1018,7 @@ fn append_additional_results_dedup(base: &mut Vec<PaperResult>, additional: Vec<
         .filter(|p| !p.doi.is_empty())
         .map(|p| p.doi.to_lowercase())
         .collect();
-    let mut title_set: HashSet<String> = base
-        .iter()
-        .map(|p| p.title.to_lowercase())
-        .collect();
+    let mut title_set: HashSet<String> = base.iter().map(|p| p.title.to_lowercase()).collect();
 
     for paper in additional {
         let doi_key = if paper.doi.is_empty() {
@@ -873,9 +1047,7 @@ fn append_additional_results_dedup(base: &mut Vec<PaperResult>, additional: Vec<
 
 fn is_preprint_venue(venue: &str) -> bool {
     let v = venue.to_lowercase();
-    v.contains("arxiv")
-        || v.contains("biorxiv")
-        || v.contains("medrxiv")
+    v.contains("arxiv") || v.contains("biorxiv") || v.contains("medrxiv")
 }
 
 #[cfg(test)]
@@ -892,6 +1064,8 @@ mod tests {
             jci: None,
             sci: None,
             llm_strict_filter: None,
+            sort_by: None,
+            sort_order: None,
             content_help: None,
             source_include: None,
             source_exclude: None,
@@ -915,6 +1089,8 @@ mod tests {
             jci: None,
             sci: None,
             llm_strict_filter: None,
+            sort_by: None,
+            sort_order: None,
             content_help: None,
             source_include: None,
             source_exclude: None,
@@ -930,6 +1106,8 @@ mod tests {
             80,
             120,
             &["openalex".to_string(), "semanticscholar".to_string()],
+            &SearchOpenAlexSection::default(),
+            &SearchSemanticScholarSection::default(),
             &SearchArxivSection::default(),
             &SearchPubMedSection::default(),
             &SearchXRxivSection::default(),
@@ -938,10 +1116,167 @@ mod tests {
     }
 
     #[test]
+    fn test_pipeline_config_rejects_unknown_sort_by() {
+        let req = PipelineRequest {
+            keyword: "test".to_string(),
+            ylo: None,
+            enable_crossref: Some(true),
+            sciif: None,
+            jci: None,
+            sci: None,
+            llm_strict_filter: None,
+            sort_by: Some("citations".to_string()),
+            sort_order: None,
+            content_help: None,
+            source_include: None,
+            source_exclude: None,
+        };
+
+        let config = PipelineConfig::from_request(
+            req,
+            &[],
+            false,
+            false,
+            Some(2019),
+            true,
+            80,
+            120,
+            &["openalex".to_string(), "semanticscholar".to_string()],
+            &SearchOpenAlexSection::default(),
+            &SearchSemanticScholarSection::default(),
+            &SearchArxivSection::default(),
+            &SearchPubMedSection::default(),
+            &SearchXRxivSection::default(),
+        );
+
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn test_pipeline_config_prefers_per_source_limits_and_semantic_key() {
+        let req = PipelineRequest {
+            keyword: "test".to_string(),
+            ylo: None,
+            enable_crossref: None,
+            sciif: None,
+            jci: None,
+            sci: None,
+            llm_strict_filter: None,
+            sort_by: None,
+            sort_order: None,
+            content_help: None,
+            source_include: None,
+            source_exclude: None,
+        };
+        let openalex = SearchOpenAlexSection {
+            max_results: 17,
+            ..SearchOpenAlexSection::default()
+        };
+        let semanticscholar = SearchSemanticScholarSection {
+            max_results: 23,
+            api_key: "ss-test-key".to_string(),
+            ..SearchSemanticScholarSection::default()
+        };
+
+        let config = PipelineConfig::from_request(
+            req,
+            &[],
+            false,
+            false,
+            Some(2019),
+            true,
+            80,
+            120,
+            &["openalex".to_string(), "semanticscholar".to_string()],
+            &openalex,
+            &semanticscholar,
+            &SearchArxivSection::default(),
+            &SearchPubMedSection::default(),
+            &SearchXRxivSection::default(),
+        )
+        .unwrap();
+
+        assert_eq!(config.oa_limit, 17);
+        assert_eq!(config.ss_limit, 23);
+        assert_eq!(config.semanticscholar.api_key, "ss-test-key");
+    }
+
+    #[test]
     fn test_paper_result_default() {
         let paper = PaperResult::default();
         assert!(paper.title.is_empty());
         assert!(paper.if_score.is_none());
+    }
+
+    fn paper_with_relevance(
+        title: &str,
+        relevance_score: u8,
+        if_score: Option<&str>,
+        year: &str,
+    ) -> PaperResult {
+        PaperResult {
+            title: title.to_string(),
+            relevance_score: Some(relevance_score),
+            if_score: if_score.map(str::to_string),
+            year: year.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_relevance_sort_orders_by_score_then_if_then_year() {
+        use super::relevance::{sort_papers, SortBy};
+
+        let mut papers = vec![
+            paper_with_relevance("high impact but weak", 40, Some("30.0"), "2025"),
+            paper_with_relevance("best semantic match", 95, Some("1.0"), "2020"),
+            paper_with_relevance("same score better impact", 80, Some("8.0"), "2021"),
+            paper_with_relevance("same score worse impact", 80, Some("2.0"), "2024"),
+        ];
+
+        sort_papers(&mut papers, SortBy::Relevance);
+
+        let ordered_titles: Vec<&str> = papers.iter().map(|p| p.title.as_str()).collect();
+        assert_eq!(
+            ordered_titles,
+            vec![
+                "best semantic match",
+                "same score better impact",
+                "same score worse impact",
+                "high impact but weak"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_local_relevance_score_prefers_exact_title_and_abstract_matches() {
+        use super::relevance::local_relevance_score;
+
+        let exact = PaperResult {
+            title: "Machine learning prediction of rock strength".to_string(),
+            abstract_text: "A neural network predicts uniaxial compressive strength of rock."
+                .to_string(),
+            ..Default::default()
+        };
+        let weak = PaperResult {
+            title: "Rock weathering observations".to_string(),
+            abstract_text: "A field survey of unrelated geological formations.".to_string(),
+            ..Default::default()
+        };
+
+        let exact_score = local_relevance_score(
+            "machine learning rock strength prediction",
+            Some("neural network prediction of rock strength"),
+            &exact,
+        );
+        let weak_score = local_relevance_score(
+            "machine learning rock strength prediction",
+            Some("neural network prediction of rock strength"),
+            &weak,
+        );
+
+        assert!(exact_score.score > weak_score.score);
+        assert!(exact_score.score >= 80);
     }
 
     #[test]
@@ -961,10 +1296,10 @@ mod tests {
             snippet: "OA Snippet".to_string(),
             ..Default::default()
         };
-        
+
         let merged = merge_search_results(vec![ss_paper], vec![oa_paper]);
         assert_eq!(merged.len(), 1);
-        
+
         let paper = &merged[0];
         assert_eq!(paper.abstract_text, "SS Abstract"); // Prefer SS
         assert_eq!(paper.pdf_url, "https://example.com/paper.pdf"); // Merge from OA

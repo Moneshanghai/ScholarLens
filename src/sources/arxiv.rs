@@ -9,12 +9,13 @@
 //! - To be polite to arXiv infrastructure, requests are throttled by default.
 
 use crate::error::Result;
-use crate::sources::rate_limiter;
+use crate::sources::retry::{next_rate_limit_delay, RateLimitRetryPolicy};
 use crate::sources::{SourcePaper, SourceProvider};
 use async_trait::async_trait;
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -23,6 +24,7 @@ const ARXIV_API_URLS: [&str; 2] = [
     "https://arxiv.org/api/query",
 ];
 const ARXIV_MAX_PER_REQUEST: usize = 2000;
+static ARXIV_SERIAL_REQUEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 /// arXiv search options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,7 +77,7 @@ impl ArxivProvider {
     pub fn new(timeout_secs: u64) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
-            .user_agent("Rscholar/0.1 (arxiv source)")
+            .user_agent("ScholarLens/0.1 (arxiv source)")
             .build()?;
         Ok(Self { client })
     }
@@ -152,27 +154,43 @@ async fn search_with_client(
         let mut last_error = None;
 
         for endpoint in ARXIV_API_URLS {
+            let policy = RateLimitRetryPolicy::conservative();
             let mut rate_limit_retries = 0u32;
+            let mut total_rate_limit_wait = Duration::ZERO;
             let mut server_error_retries = 0u32;
 
             let page_resp = loop {
-                rate_limiter::arxiv().acquire().await;
-                match client.get(endpoint).query(&params).send().await {
+                match send_arxiv_request(client, endpoint, &params, options.request_delay_ms).await {
                     Ok(resp) => {
                         let status = resp.status();
                         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                             rate_limit_retries += 1;
-                            let backoff_secs = 1u64 << rate_limit_retries.min(4);
-                            warn!(
-                                source = "arxiv",
-                                endpoint = endpoint,
-                                status = 429,
-                                attempt = rate_limit_retries,
-                                backoff_secs = backoff_secs,
-                                "arXiv rate limited (429), retrying with exponential backoff"
-                            );
-                            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-                            continue;
+                            let headers = resp.headers().clone();
+                            let error_text = resp.text().await.unwrap_or_default();
+                            if let Some(delay) = next_rate_limit_delay(
+                                &headers,
+                                rate_limit_retries,
+                                total_rate_limit_wait,
+                                policy,
+                            ) {
+                                total_rate_limit_wait += delay;
+                                warn!(
+                                    source = "arxiv",
+                                    endpoint = endpoint,
+                                    status = 429,
+                                    attempt = rate_limit_retries,
+                                    delay_secs = delay.as_secs_f64(),
+                                    error = %error_text,
+                                    "arXiv rate limited (429), retrying"
+                                );
+                                tokio::time::sleep(delay).await;
+                                continue;
+                            }
+                            last_error = Some(format!(
+                                "arXiv rate limited after {} retries",
+                                policy.max_retries
+                            ));
+                            break None;
                         }
                         if status.is_server_error() {
                             server_error_retries += 1;
@@ -254,15 +272,36 @@ async fn search_with_client(
     Ok(out)
 }
 
+async fn send_arxiv_request(
+    client: &Client,
+    endpoint: &str,
+    params: &[(&str, String)],
+    request_delay_ms: u64,
+) -> reqwest::Result<reqwest::Response> {
+    let lock = ARXIV_SERIAL_REQUEST_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    let _guard = lock.lock().await;
+    let response = client.get(endpoint).query(params).send().await;
+    if request_delay_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(request_delay_ms)).await;
+    }
+    response
+}
+
 fn parse_atom_entries(xml: &str) -> Vec<ArxivResult> {
-    let entry_re = Regex::new(r"(?s)<entry>(.*?)</entry>").unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
-    let title_re = Regex::new(r"(?s)<title>(.*?)</title>").unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
-    let summary_re = Regex::new(r"(?s)<summary>(.*?)</summary>").unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
-    let published_re = Regex::new(r"(?s)<published>(.*?)</published>").unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
-    let id_re = Regex::new(r"(?s)<id>(.*?)</id>").unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
-    let doi_re = Regex::new(r"(?s)<arxiv:doi[^>]*>(.*?)</arxiv:doi>").unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
-    let author_re =
-        Regex::new(r"(?s)<author>\s*<name>(.*?)</name>\s*</author>").unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let entry_re = Regex::new(r"(?s)<entry>(.*?)</entry>")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let title_re = Regex::new(r"(?s)<title>(.*?)</title>")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let summary_re = Regex::new(r"(?s)<summary>(.*?)</summary>")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let published_re = Regex::new(r"(?s)<published>(.*?)</published>")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let id_re = Regex::new(r"(?s)<id>(.*?)</id>")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let doi_re = Regex::new(r"(?s)<arxiv:doi[^>]*>(.*?)</arxiv:doi>")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let author_re = Regex::new(r"(?s)<author>\s*<name>(.*?)</name>\s*</author>")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
     let pdf_link_re = Regex::new(r#"(?s)<link[^>]*title="pdf"[^>]*href="([^"]+)""#)
         .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
     let alt_link_re = Regex::new(r#"(?s)<link[^>]*rel="alternate"[^>]*href="([^"]+)""#)
@@ -281,13 +320,18 @@ fn parse_atom_entries(xml: &str) -> Vec<ArxivResult> {
             let alt_url = capture_first(&alt_link_re, entry).unwrap_or_default();
             let authors = author_re
                 .captures_iter(entry)
-                .filter_map(|c| c.get(1).map(|m| decode_xml_entities(strip_tags(m.as_str()).trim())))
+                .filter_map(|c| {
+                    c.get(1)
+                        .map(|m| decode_xml_entities(strip_tags(m.as_str()).trim()))
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
 
             let year = published.get(0..4).unwrap_or_default().to_string();
-            let clean_title = decode_xml_entities(strip_tags(title.as_str()).trim()).replace('\n', " ");
-            let clean_abstract = decode_xml_entities(strip_tags(abstract_text.as_str()).trim()).replace('\n', " ");
+            let clean_title =
+                decode_xml_entities(strip_tags(title.as_str()).trim()).replace('\n', " ");
+            let clean_abstract =
+                decode_xml_entities(strip_tags(abstract_text.as_str()).trim()).replace('\n', " ");
 
             ArxivResult {
                 title: clean_title,
@@ -304,8 +348,10 @@ fn parse_atom_entries(xml: &str) -> Vec<ArxivResult> {
 }
 
 fn capture_first(re: &Regex, text: &str) -> Option<String> {
-    re.captures(text)
-        .and_then(|cap| cap.get(1).map(|m| decode_xml_entities(strip_tags(m.as_str()).trim())))
+    re.captures(text).and_then(|cap| {
+        cap.get(1)
+            .map(|m| decode_xml_entities(strip_tags(m.as_str()).trim()))
+    })
 }
 
 fn strip_tags(text: &str) -> String {

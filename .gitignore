@@ -27,6 +27,18 @@ front/dist/
 # ===== AI Tools =====
 .claude/
 __pycache__/
+codex-image-previews/
+
+# ===== Local verification artifacts =====
+*.log
+*.pid
+front/src/styles/*.snapshot
+/reference-dashboard.png
+/reference-login.png
+/rscholar-admin-style.png
+/rscholar-docs-admin-style.png
+/rscholar-home.png
+/rscholar-task-admin-style.png
 
 # ===== OS =====
 .DS_Store

@@ -8,6 +8,7 @@
 
 use crate::error::Result;
 use crate::sources::rate_limiter;
+use crate::sources::retry::{next_rate_limit_delay, RateLimitRetryPolicy};
 use crate::sources::{SourcePaper, SourceProvider};
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt};
@@ -115,7 +116,7 @@ impl XRxivProvider {
     pub fn new(server: XRxivServer, timeout_secs: u64) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
-            .user_agent("Rscholar/0.1 (xrxiv source)")
+            .user_agent("ScholarLens/0.1 (xrxiv source)")
             .build()?;
         Ok(Self { server, client })
     }
@@ -272,14 +273,24 @@ async fn search_with_client(
     }
 
     out.truncate(max_results);
-    info!(source = server_path, total = out.len(), "xrxiv search completed");
+    info!(
+        source = server_path,
+        total = out.len(),
+        "xrxiv search completed"
+    );
     Ok(out)
 }
 
-async fn fetch_with_retries(client: &Client, endpoint: &str, max_retries: usize) -> Result<XRxivResponse> {
+async fn fetch_with_retries(
+    client: &Client,
+    endpoint: &str,
+    max_retries: usize,
+) -> Result<XRxivResponse> {
     let mut network_retries = 0usize;
     let mut rate_limit_retries = 0u32;
+    let mut total_rate_limit_wait = Duration::ZERO;
     let mut server_error_retries = 0u32;
+    let policy = RateLimitRetryPolicy::conservative();
 
     loop {
         rate_limiter::xrxiv().acquire().await;
@@ -306,17 +317,26 @@ async fn fetch_with_retries(client: &Client, endpoint: &str, max_retries: usize)
 
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             rate_limit_retries += 1;
-            let backoff_secs = 1u64 << rate_limit_retries.min(4);
-            warn!(
-                source = "xrxiv",
-                endpoint = endpoint,
-                status = 429,
-                attempt = rate_limit_retries,
-                backoff_secs = backoff_secs,
-                "xrxiv rate limited (429), retrying with exponential backoff"
-            );
-            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-            continue;
+            let headers = resp.headers().clone();
+            if let Some(delay) =
+                next_rate_limit_delay(&headers, rate_limit_retries, total_rate_limit_wait, policy)
+            {
+                total_rate_limit_wait += delay;
+                warn!(
+                    source = "xrxiv",
+                    endpoint = endpoint,
+                    status = 429,
+                    attempt = rate_limit_retries,
+                    delay_secs = delay.as_secs_f64(),
+                    "xrxiv rate limited (429), retrying"
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            return Err(crate::error::GscholarError::Api {
+                code: 429,
+                message: format!("xrxiv rate limited after {} retries", policy.max_retries),
+            });
         }
 
         if status.is_server_error() {
@@ -351,12 +371,22 @@ fn map_xrxiv_paper(raw: XRxivPaperRaw, server: XRxivServer) -> XRxivResult {
     let html_url = if doi.is_empty() {
         String::new()
     } else {
-        format!("https://www.{}.org/content/{}v{}", server.as_path(), doi, version)
+        format!(
+            "https://www.{}.org/content/{}v{}",
+            server.as_path(),
+            doi,
+            version
+        )
     };
     let pdf_url = if doi.is_empty() {
         String::new()
     } else {
-        format!("https://www.{}.org/content/{}v{}.full.pdf", server.as_path(), doi, version)
+        format!(
+            "https://www.{}.org/content/{}v{}.full.pdf",
+            server.as_path(),
+            doi,
+            version
+        )
     };
 
     XRxivResult {

@@ -2,8 +2,8 @@
 //!
 //! Translates user keyword into concise academic English query terms.
 
-use crate::error::{GscholarError, Result};
 use super::{ChatMessage, LlmProvider};
+use crate::error::{GscholarError, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 

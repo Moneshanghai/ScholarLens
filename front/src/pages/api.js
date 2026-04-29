@@ -11,14 +11,11 @@ export class ApiPage {
       <header class="header">
         <div class="container header-container">
           <button id="history-toggle" class="btn-history" aria-label="查询历史">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
+            <i class="bi bi-clock-history"></i>
             <span>历史记录</span>
           </button>
-          <a href="/" class="header-logo">RustScholar</a>
-          <span class="header-link header-link-active">API 文档</span>
+          <a href="/" class="header-logo">ScholarLens</a>
+          <span class="header-link header-link-active"><i class="bi bi-file-earmark-text"></i> API 文档</span>
         </div>
       </header>
 
@@ -27,7 +24,7 @@ export class ApiPage {
         <div class="container">
           <div class="api-card">
             <h1 class="api-title">API 接口文档</h1>
-            <p class="api-intro">RustScholar 提供 RESTful API 接口，支持程序化调用。以下是各接口的使用方法。</p>
+            <p class="api-intro">ScholarLens 提供 RESTful API 接口，支持程序化调用。以下是各接口的使用方法。</p>
             
             <!-- Base URL -->
             <div class="api-block">
@@ -137,6 +134,18 @@ export class ApiPage {
                     <td></td>
                     <td>本次任务排除的检索源</td>
                   </tr>
+                  <tr>
+                    <td><code>sort_by</code></td>
+                    <td>String</td>
+                    <td></td>
+                    <td>结果排序字段，当前支持 <code>relevance</code>、<code>impact_factor</code>、<code>has_pdf</code></td>
+                  </tr>
+                  <tr>
+                    <td><code>sort_order</code></td>
+                    <td>String</td>
+                    <td></td>
+                    <td><code>desc</code>=有 PDF 优先，<code>asc</code>=无 PDF 优先</td>
+                  </tr>
                 </tbody>
               </table>
               <p class="api-note">
@@ -154,6 +163,8 @@ export class ApiPage {
     "llm_strict_filter": false,
     "source_include": ["openalex", "arxiv"],
     "source_exclude": ["semanticscholar"],
+    "sort_by": "has_pdf",
+    "sort_order": "desc",
     "content_help": "关注岩石力学中的机器学习预测方法"
   }'</pre>
               </div>
@@ -171,6 +182,8 @@ response = requests.post(
         "llm_strict_filter": False,
         "source_include": ["openalex", "arxiv"],
         "source_exclude": ["semanticscholar"],
+        "sort_by": "has_pdf",
+        "sort_order": "desc",
         "content_help": "关注岩石力学中的机器学习预测方法"
     }
 )
@@ -267,10 +280,7 @@ print(f"Task created: {task_id}")</pre>
             <!-- Back Button -->
             <div class="api-footer">
               <a href="/" class="btn btn-primary">
-                <svg class="btn-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="19" y1="12" x2="5" y2="12"></line>
-                  <polyline points="12 19 5 12 12 5"></polyline>
-                </svg>
+                <i class="bi bi-arrow-left btn-icon"></i>
                 <span>返回搜索</span>
               </a>
             </div>

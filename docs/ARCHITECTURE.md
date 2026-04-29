@@ -1,4 +1,4 @@
-﻿# Rscholar 架构文档（中文）
+# ScholarLens 架构文档（中文）
 
 本文档描述当前代码实现的系统架构、模块边界、任务执行流程与运行时数据流。
 
@@ -6,7 +6,7 @@
 
 ## 1. 系统定位
 
-Rscholar 是一个面向学术检索场景的异步任务型服务，核心能力是：
+ScholarLens 是一个面向学术检索场景的异步任务型服务，核心能力是：
 
 - 多源检索（OpenAlex / Semantic Scholar / arXiv / PubMed / bioRxiv / medRxiv）
 - 元数据增强（Crossref + Semantic Scholar DOI 批量回填）

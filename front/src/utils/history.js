@@ -3,11 +3,13 @@
  */
 
 const STORAGE_KEY = 'rustscholar_history';
+const HIDDEN_SERVER_KEY = 'rustscholar_hidden_server_history';
 const MAX_HISTORY_ITEMS = 50;
 
-class HistoryManager {
+export class HistoryManager {
     constructor() {
         this.history = this.loadHistory();
+        this.hiddenServerTaskIds = this.loadHiddenServerTaskIds();
     }
 
     loadHistory() {
@@ -28,7 +30,29 @@ class HistoryManager {
         }
     }
 
+    loadHiddenServerTaskIds() {
+        try {
+            const data = localStorage.getItem(HIDDEN_SERVER_KEY);
+            const ids = data ? JSON.parse(data) : [];
+            return new Set(Array.isArray(ids) ? ids : []);
+        } catch (e) {
+            console.error('Failed to load hidden server history:', e);
+            return new Set();
+        }
+    }
+
+    saveHiddenServerTaskIds() {
+        try {
+            localStorage.setItem(HIDDEN_SERVER_KEY, JSON.stringify([...this.hiddenServerTaskIds]));
+        } catch (e) {
+            console.error('Failed to save hidden server history:', e);
+        }
+    }
+
     addTask(taskId, keyword, status = 'queued') {
+        this.hiddenServerTaskIds.delete(taskId);
+        this.saveHiddenServerTaskIds();
+
         // Check if task already exists
         const existing = this.history.findIndex(item => item.taskId === taskId);
         if (existing >= 0) {
@@ -68,12 +92,59 @@ class HistoryManager {
         return this.history;
     }
 
+    mergeServerHistory(tasks) {
+        if (!Array.isArray(tasks) || tasks.length === 0) return;
+
+        const byId = new Map(this.history.map((item) => [item.taskId, item]));
+
+        for (const task of tasks) {
+            const normalized = this.normalizeServerTask(task);
+            if (!normalized) continue;
+            if (this.hiddenServerTaskIds.has(normalized.taskId)) continue;
+
+            const existing = byId.get(normalized.taskId);
+            byId.set(normalized.taskId, existing ? { ...existing, ...normalized } : normalized);
+        }
+
+        this.history = Array.from(byId.values())
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+            .slice(0, MAX_HISTORY_ITEMS);
+
+        this.saveHistory();
+    }
+
+    normalizeServerTask(task) {
+        const taskId = task?.task_id || task?.taskId;
+        if (!taskId) return null;
+
+        return {
+            taskId,
+            keyword: task.keyword || '未命名检索',
+            status: task.status || 'pending',
+            createdAt: this.normalizeTimestamp(task.created_at ?? task.createdAt),
+            updatedAt: this.normalizeTimestamp(task.updated_at ?? task.updatedAt),
+            source: 'server',
+        };
+    }
+
+    normalizeTimestamp(value) {
+        const timestamp = Number(value);
+        if (!Number.isFinite(timestamp) || timestamp <= 0) return Date.now();
+        return timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+    }
+
     clearHistory() {
+        this.history.forEach((item) => {
+            if (item.taskId) this.hiddenServerTaskIds.add(item.taskId);
+        });
         this.history = [];
+        this.saveHiddenServerTaskIds();
         this.saveHistory();
     }
 
     removeTask(taskId) {
+        this.hiddenServerTaskIds.add(taskId);
+        this.saveHiddenServerTaskIds();
         this.history = this.history.filter(item => item.taskId !== taskId);
         this.saveHistory();
     }

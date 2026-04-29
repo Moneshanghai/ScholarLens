@@ -63,7 +63,8 @@ pub(super) async fn apply_llm_relevance_filter(
         if let Some(reason) = &res.reason {
             total_output_chars += reason.len();
         }
-        total_input_chars += final_results[index].title.len() + final_results[index].abstract_text.len();
+        total_input_chars +=
+            final_results[index].title.len() + final_results[index].abstract_text.len();
     }
 
     final_results = new_results;

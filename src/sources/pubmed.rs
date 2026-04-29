@@ -8,6 +8,7 @@
 
 use crate::error::Result;
 use crate::sources::rate_limiter;
+use crate::sources::retry::{next_rate_limit_delay, RateLimitRetryPolicy};
 use crate::sources::{SourcePaper, SourceProvider};
 use async_trait::async_trait;
 use regex::Regex;
@@ -42,7 +43,7 @@ impl PubMedQueryOptions {
             page_size: 100,
             timeout_secs: 30,
             api_key: None,
-            tool: Some("Rscholar".to_string()),
+            tool: Some("ScholarLens".to_string()),
             email: Some("c76d@c.com".to_string()),
             delay_no_key_ms: 350,
             delay_with_key_ms: 120,
@@ -82,7 +83,7 @@ impl PubMedProvider {
     pub fn new(timeout_secs: u64) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
-            .user_agent("Rscholar/0.1 (pubmed source)")
+            .user_agent("ScholarLens/0.1 (pubmed source)")
             .build()?;
         Ok(Self { client })
     }
@@ -130,8 +131,11 @@ async fn search_with_client(
 
     let max_results = options.max_results.max(1);
     let page_size = options.page_size.clamp(1, PUBMED_MAX_RETMAX);
-    let has_key = options.api_key.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false);
-
+    let has_key = options
+        .api_key
+        .as_ref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
 
     info!(
         query = query,
@@ -198,19 +202,27 @@ async fn call_esearch(
     retmax: usize,
     options: &PubMedQueryOptions,
 ) -> Result<ESearchResponse> {
-    let has_key = options.api_key.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false);
+    let has_key = options
+        .api_key
+        .as_ref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
 
     let mut rate_limit_retries = 0u32;
+    let mut total_rate_limit_wait = Duration::ZERO;
     let mut server_error_retries = 0u32;
+    let policy = RateLimitRetryPolicy::conservative();
 
     let response = loop {
-        let mut req = client.get(format!("{PUBMED_BASE_URL}/esearch.fcgi")).query(&[
-            ("db", "pubmed"),
-            ("term", query),
-            ("retmode", "json"),
-            ("retstart", &retstart.to_string()),
-            ("retmax", &retmax.to_string()),
-        ]);
+        let mut req = client
+            .get(format!("{PUBMED_BASE_URL}/esearch.fcgi"))
+            .query(&[
+                ("db", "pubmed"),
+                ("term", query),
+                ("retmode", "json"),
+                ("retstart", &retstart.to_string()),
+                ("retmax", &retmax.to_string()),
+            ]);
 
         if let Some(v) = options.api_key.as_ref().filter(|v| !v.trim().is_empty()) {
             req = req.query(&[("api_key", v.as_str())]);
@@ -228,16 +240,25 @@ async fn call_esearch(
 
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             rate_limit_retries += 1;
-            let backoff_secs = 1u64 << rate_limit_retries.min(4); // 1, 2, 4, 8, 16s
-            warn!(
-                source = "pubmed",
-                status = 429,
-                attempt = rate_limit_retries,
-                backoff_secs = backoff_secs,
-                "PubMed rate limited (429), retrying with exponential backoff"
-            );
-            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-            continue;
+            let headers = resp.headers().clone();
+            if let Some(delay) =
+                next_rate_limit_delay(&headers, rate_limit_retries, total_rate_limit_wait, policy)
+            {
+                total_rate_limit_wait += delay;
+                warn!(
+                    source = "pubmed",
+                    status = 429,
+                    attempt = rate_limit_retries,
+                    delay_secs = delay.as_secs_f64(),
+                    "PubMed rate limited (429), retrying"
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            return Err(crate::error::GscholarError::Api {
+                code: 429,
+                message: format!("PubMed rate limited after {} retries", policy.max_retries),
+            });
         }
 
         if status.is_server_error() {
@@ -270,17 +291,25 @@ async fn call_efetch(
     options: &PubMedQueryOptions,
 ) -> Result<String> {
     let joined = pmids.join(",");
-    let has_key = options.api_key.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false);
+    let has_key = options
+        .api_key
+        .as_ref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
 
     let mut rate_limit_retries = 0u32;
+    let mut total_rate_limit_wait = Duration::ZERO;
     let mut server_error_retries = 0u32;
+    let policy = RateLimitRetryPolicy::conservative();
 
     let response = loop {
-        let mut req = client.get(format!("{PUBMED_BASE_URL}/efetch.fcgi")).query(&[
-            ("db", "pubmed"),
-            ("id", joined.as_str()),
-            ("retmode", "xml"),
-        ]);
+        let mut req = client
+            .get(format!("{PUBMED_BASE_URL}/efetch.fcgi"))
+            .query(&[
+                ("db", "pubmed"),
+                ("id", joined.as_str()),
+                ("retmode", "xml"),
+            ]);
 
         if let Some(v) = options.api_key.as_ref().filter(|v| !v.trim().is_empty()) {
             req = req.query(&[("api_key", v.as_str())]);
@@ -298,17 +327,26 @@ async fn call_efetch(
 
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             rate_limit_retries += 1;
-            let backoff_secs = 1u64 << rate_limit_retries.min(4);
-            warn!(
-                source = "pubmed",
-                status = 429,
-                attempt = rate_limit_retries,
-                backoff_secs = backoff_secs,
-                pmid_count = pmids.len(),
-                "PubMed efetch rate limited (429), retrying with exponential backoff"
-            );
-            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-            continue;
+            let headers = resp.headers().clone();
+            if let Some(delay) =
+                next_rate_limit_delay(&headers, rate_limit_retries, total_rate_limit_wait, policy)
+            {
+                total_rate_limit_wait += delay;
+                warn!(
+                    source = "pubmed",
+                    status = 429,
+                    attempt = rate_limit_retries,
+                    delay_secs = delay.as_secs_f64(),
+                    pmid_count = pmids.len(),
+                    "PubMed efetch rate limited (429), retrying"
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            return Err(crate::error::GscholarError::Api {
+                code: 429,
+                message: format!("PubMed efetch rate limited after {} retries", policy.max_retries),
+            });
         }
 
         if status.is_server_error() {
@@ -404,12 +442,16 @@ fn parse_pubmed_xml(xml: &str) -> Vec<PubMedResult> {
 }
 
 fn capture_first(re: &Regex, text: &str) -> Option<String> {
-    re.captures(text)
-        .and_then(|cap| cap.get(1).map(|m| decode_xml_entities(strip_tags(m.as_str()).trim())))
+    re.captures(text).and_then(|cap| {
+        cap.get(1)
+            .map(|m| decode_xml_entities(strip_tags(m.as_str()).trim()))
+    })
 }
 
 fn strip_tags(text: &str) -> String {
-    regex_or_empty(r"(?s)<[^>]+>").replace_all(text, "").to_string()
+    regex_or_empty(r"(?s)<[^>]+>")
+        .replace_all(text, "")
+        .to_string()
 }
 
 fn decode_xml_entities(input: &str) -> String {
@@ -441,7 +483,7 @@ mod tests {
     async fn test_pubmed_esearch_raw_response() {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
-            .user_agent("Rscholar/0.1 (pubmed test)")
+            .user_agent("ScholarLens/0.1 (pubmed test)")
             .build()
             .expect("failed to build client");
 
@@ -472,14 +514,20 @@ mod tests {
         println!("Status: {status}");
         println!("Headers: {headers}");
         println!("Body length: {} bytes", body.len());
-        println!("Body (first 2000 chars):\n{}", &body[..body.len().min(2000)]);
+        println!(
+            "Body (first 2000 chars):\n{}",
+            &body[..body.len().min(2000)]
+        );
         println!("=== End Raw Response ===");
 
         // Try parsing as JSON to see the actual error
         match serde_json::from_str::<ESearchResponse>(&body) {
             Ok(parsed) => {
-                println!("Parsed OK: count={}, idlist len={}", 
-                    parsed.esearchresult.count, parsed.esearchresult.idlist.len());
+                println!(
+                    "Parsed OK: count={}, idlist len={}",
+                    parsed.esearchresult.count,
+                    parsed.esearchresult.idlist.len()
+                );
             }
             Err(e) => {
                 println!("JSON parse error: {e}");

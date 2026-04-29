@@ -55,18 +55,20 @@ Push-Location $ScriptDir
 Pop-Location
 
 $BinCandidates = @(
+    (Join-Path $ScriptDir "target\release\ScholarLens.exe"),
     (Join-Path $ScriptDir "target\release\Rscholar.exe"),
     (Join-Path $ScriptDir "target\release\rscholar.exe"),
+    (Join-Path $ScriptDir "target\release\ScholarLens"),
     (Join-Path $ScriptDir "target\release\Rscholar"),
     (Join-Path $ScriptDir "target\release\rscholar")
 )
 $BinPath = $BinCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $BinPath) {
-    throw "Backend binary not found under target/release (Rscholar/rscholar)."
+    throw "Backend binary not found under target/release (ScholarLens/Rscholar/rscholar)."
 }
 
 Write-Host ""
-Write-Host "Rscholar starting" -ForegroundColor Green
+Write-Host "ScholarLens starting" -ForegroundColor Green
 Write-Host "  URL   : http://localhost:$Port"
 Write-Host "  Static: $DistDir"
 Write-Host "  Bin   : $BinPath"

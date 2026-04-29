@@ -4,15 +4,18 @@
 //! are handled by external services (e.g., Cloudflare WAF).
 
 use super::admin;
-use super::handlers::{health_handler, pipeline_handler, sources_handler, task_bibtex_handler, task_download_handler, task_status_handler};
+use super::handlers::{
+    health_handler, pipeline_handler, sources_handler, task_bibtex_handler, task_download_handler,
+    task_list_handler, task_status_handler,
+};
 use super::state::AppState;
 use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::TraceLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::trace::TraceLayer;
 use tracing::info;
 
 /// Create the API router with all middleware
@@ -43,7 +46,10 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
         // Cache
         .route("/cache/journals", get(admin::list_cache_handler))
         .route("/cache/journals", delete(admin::clear_cache_handler))
-        .route("/cache/journals/{name}", delete(admin::delete_cache_entry_handler))
+        .route(
+            "/cache/journals/{name}",
+            delete(admin::delete_cache_entry_handler),
+        )
         .route("/cache/stats", get(admin::cache_stats_handler))
         // Stats
         .route("/stats/overview", get(admin::stats_overview_handler))
@@ -63,7 +69,7 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
     let mut api_router: Router = Router::new()
         .route("/health", get(health_handler))
         .route("/sources", get(sources_handler))
-        .route("/tasks", post(pipeline_handler))
+        .route("/tasks", get(task_list_handler).post(pipeline_handler))
         .route("/tasks/{id}", get(task_status_handler))
         .route("/tasks/{id}/download", get(task_download_handler))
         .route("/tasks/{id}/bibtex", get(task_bibtex_handler))
@@ -81,9 +87,8 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
     if let Some(dir) = static_dir {
         let index_path = format!("{}/index.html", dir);
         info!(static_dir = %dir, index = %index_path, "Enabled static file fallback service");
-        let serve_dir = ServeDir::new(&dir)
-            .not_found_service(ServeFile::new(&index_path));
-        
+        let serve_dir = ServeDir::new(&dir).not_found_service(ServeFile::new(&index_path));
+
         api_router.fallback_service(serve_dir)
     } else {
         api_router
@@ -93,8 +98,8 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::config::ServerConfig;
     use crate::db::{init_pool, DbConfig};
+    use crate::server::config::ServerConfig;
     use tempfile::TempDir;
 
     #[test]

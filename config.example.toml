@@ -1,4 +1,4 @@
-# Rscholar Configuration
+# ScholarLens Configuration
 # All API keys and settings are configured here.
 # Copy this file to config.toml and fill in your keys.
 
@@ -91,6 +91,8 @@ timeout_sec = 30
 # Semantic Scholar Search (Enrichment source)
 enabled = true
 max_results = 100
+# Optional but recommended: avoids unauthenticated shared throttling during peak usage.
+api_key = ""
 timeout_sec = 30
 
 [search.arxiv]
@@ -110,7 +112,7 @@ enabled = true
 max_results = 200
 page_size = 100
 api_key = ""
-tool = "Rscholar"
+tool = "ScholarLens"
 email = ""
 timeout_sec = 30
 delay_no_key_ms = 350

@@ -1,4 +1,4 @@
-﻿# Rscholar API 文档（中文）
+# ScholarLens API 文档（中文）
 
 本文档描述当前 `src/server/` 实现的 HTTP API。
 
@@ -54,6 +54,8 @@
 | `content_help` | string | 否 | 研究意图描述（触发 LLM 扩展/相关性） |
 | `source_include` | string[] | 否 | source 白名单 |
 | `source_exclude` | string[] | 否 | source 黑名单 |
+| `sort_by` | string | 否 | 结果排序字段。当前支持：`relevance`（默认）、`impact_factor`、`has_pdf` |
+| `sort_order` | string | 否 | `has_pdf` 排序方向。`desc` 表示有 PDF 优先，`asc` 表示无 PDF 优先 |
 
 支持的 source 值：
 
@@ -67,6 +69,8 @@
 ### 重要运行规则
 
 - `source_include` 里有未知值会直接返回校验错误。
+- 外部来源返回 429 时会有限重试；单个来源持续限流不会中断整条任务，会记录到结果的 `source_errors`。
+- Semantic Scholar 支持可选 `search.semanticscholar.api_key`；建议配置，避免无认证共享限流。
 - 若设置了 `sciif/jci/sci` 但服务端未配置 `easyscholar.keys`，请求会被拒绝。
 - 若关键词非英文，pipeline 会先尝试翻译成英文再检索。
 - 关键词扩展基于翻译后的英文关键词。
@@ -83,7 +87,9 @@
   "llm_strict_filter": false,
   "content_help": "关注机器学习和人工智能的应用",
   "source_include": ["openalex", "arxiv", "pubmed"],
-  "source_exclude": ["semanticscholar"]
+  "source_exclude": ["semanticscholar"],
+  "sort_by": "has_pdf",
+  "sort_order": "desc"
 }
 ```
 
@@ -103,6 +109,50 @@
 {
   "error": "Configuration error",
   "details": "Unsupported source(s): foo. Supported sources: openalex, semanticscholar, arxiv, pubmed, biorxiv, medrxiv"
+}
+```
+
+### 来源配置说明
+
+```toml
+[search.semanticscholar]
+enabled = true
+max_results = 100
+api_key = "" # 可选，推荐配置以降低共享限流影响
+timeout_sec = 30
+
+[search.arxiv]
+enabled = true
+request_delay_ms = 3000 # arXiv 请求在进程内串行
+```
+
+## `GET /tasks`
+
+查询已持久化的任务历史，供前端历史侧栏在内存清理或服务重启后恢复记录。
+
+### 查询参数
+
+- `page`：页码，默认 `1`
+- `limit`：每页数量，默认 `50`，最大 `100`
+- `status`：可选，`pending`、`running`、`completed`、`failed`
+
+### 响应 `200`
+
+```json
+{
+  "items": [
+    {
+      "task_id": "550e8400-e29b-41d4-a716-446655440000",
+      "keyword": "rock strength prediction",
+      "status": "completed",
+      "progress_percent": 100,
+      "created_at": 1700000000000,
+      "updated_at": 1700000120000
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "limit": 50
 }
 ```
 

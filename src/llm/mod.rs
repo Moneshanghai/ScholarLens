@@ -3,12 +3,13 @@
 //! Uses LLM providers to judge if papers are relevant to search keywords.
 //! Supports provider abstraction, config-driven initialization, and fallback scheduling.
 
-mod provider_core;
 pub mod keyword_expansion;
 pub mod keyword_translation;
+mod provider_core;
 
 use crate::error::{GscholarError, Result};
 use async_trait::async_trait;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -24,8 +25,8 @@ mod providers {
 
 // Re-export built-in provider implementations
 pub use providers::aiping::AiPingProvider;
-pub use providers::siliconflow::SiliconFlowProvider;
 pub use providers::bigmodel::BigModelProvider;
+pub use providers::siliconflow::SiliconFlowProvider;
 
 /// Maximum concurrent requests
 const MAX_CONCURRENT: usize = 6;
@@ -45,6 +46,13 @@ pub struct RelevanceResult {
     pub reason: Option<String>,
 }
 
+/// Numeric relevance score for sorting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelevanceScore {
+    pub score: u8,
+    pub reason: Option<String>,
+}
+
 /// Chat message for API
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -57,13 +65,13 @@ pub struct ChatMessage {
 pub trait LlmProvider: Send + Sync {
     /// Provider name for logging
     fn name(&self) -> &str;
-    
+
     /// Send a chat completion request and get the response
     async fn chat_completion(&self, messages: Vec<ChatMessage>) -> Result<String>;
 }
 
 /// Build the prompt for relevance judgment (English)
-/// 
+///
 /// # Arguments
 /// * `keyword` - The search keyword
 /// * `paper` - Paper information (title, abstract, venue)
@@ -94,9 +102,118 @@ Answer:"#,
         keyword,
         user_context,
         paper.title,
-        if paper.abstract_text.is_empty() { "(No abstract available)" } else { &paper.abstract_text },
-        if paper.venue.is_empty() { "(Unknown)" } else { &paper.venue }
+        if paper.abstract_text.is_empty() {
+            "(No abstract available)"
+        } else {
+            &paper.abstract_text
+        },
+        if paper.venue.is_empty() {
+            "(Unknown)"
+        } else {
+            &paper.venue
+        }
     )
+}
+
+/// Build the prompt for numeric relevance scoring.
+fn build_score_prompt(
+    keyword: &str,
+    paper: &PaperInfo,
+    content_filter_help: Option<&str>,
+) -> String {
+    let user_context = match content_filter_help {
+        Some(help) if !help.trim().is_empty() => format!(
+            "\nUser's Research Focus: {}\nUse this as the primary relevance criterion.",
+            help.trim()
+        ),
+        _ => String::new(),
+    };
+
+    format!(
+        r#"Score this academic paper's relevance to the search request.
+
+Search Keyword: {}{}
+
+Paper Title: {}
+Abstract: {}
+Journal/Venue: {}
+
+Return ONLY compact JSON with this exact shape:
+{{"score": <integer 0-100>, "reason": "<short reason>"}}
+
+Scoring guide:
+- 90-100: directly answers the search request and research focus
+- 70-89: clearly related, useful, but not a perfect focus match
+- 40-69: partially related or method/domain mismatch
+- 0-39: weakly related or unrelated
+
+JSON:"#,
+        keyword,
+        user_context,
+        paper.title,
+        if paper.abstract_text.is_empty() {
+            "(No abstract available)"
+        } else {
+            &paper.abstract_text
+        },
+        if paper.venue.is_empty() {
+            "(Unknown)"
+        } else {
+            &paper.venue
+        }
+    )
+}
+
+fn extract_json_object(raw: &str) -> Result<&str> {
+    let start = raw.find('{').ok_or_else(|| {
+        GscholarError::Parse("LLM relevance score response did not contain JSON object".to_string())
+    })?;
+    let end = raw.rfind('}').ok_or_else(|| {
+        GscholarError::Parse(
+            "LLM relevance score response did not contain JSON object end".to_string(),
+        )
+    })?;
+    if end < start {
+        return Err(GscholarError::Parse(
+            "LLM relevance score response JSON object was malformed".to_string(),
+        ));
+    }
+    Ok(&raw[start..=end])
+}
+
+fn parse_score_value(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+}
+
+fn normalize_score(score: f64) -> u8 {
+    score.round().clamp(0.0, 100.0) as u8
+}
+
+fn normalize_reason(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(240).collect())
+}
+
+/// Parse a numeric relevance score response from an LLM.
+pub(crate) fn parse_relevance_score_response(raw: &str) -> Result<RelevanceScore> {
+    let json_text = extract_json_object(raw)?;
+    let value: Value = serde_json::from_str(json_text)?;
+    let score = value
+        .get("score")
+        .and_then(parse_score_value)
+        .ok_or_else(|| {
+            GscholarError::Parse("LLM relevance score response missing numeric score".to_string())
+        })?;
+
+    Ok(RelevanceScore {
+        score: normalize_score(score),
+        reason: normalize_reason(value.get("reason")),
+    })
 }
 
 /// LLM-based relevance filter using any provider
@@ -215,23 +332,26 @@ impl LlmRelevanceFilter {
     }
 
     /// Check relevance of a single paper (with fallback)
-    /// 
+    ///
     /// # Arguments
     /// * `keyword` - Search keyword
     /// * `paper` - Paper information
     /// * `content_filter_help` - Optional user description of desired research direction
     pub async fn check_relevance(
-        &self, 
-        keyword: &str, 
+        &self,
+        keyword: &str,
         paper: &PaperInfo,
         content_filter_help: Option<&str>,
     ) -> Result<RelevanceResult> {
         // Acquire semaphore permit for concurrency control
-        let _permit = self.semaphore.acquire().await
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
             .map_err(|e| GscholarError::Parse(format!("Semaphore error: {}", e)))?;
 
         let prompt = build_prompt(keyword, paper, content_filter_help);
-        
+
         let messages = vec![ChatMessage {
             role: "user".to_string(),
             content: prompt,
@@ -244,8 +364,8 @@ impl LlmRelevanceFilter {
 
             match provider.chat_completion(messages.clone()).await {
                 Ok(answer) => {
-                     let is_relevant = answer.trim().to_uppercase().starts_with("YES");
-                    
+                    let is_relevant = answer.trim().to_uppercase().starts_with("YES");
+
                     debug!(
                         title = %paper.title,
                         provider = %provider.name(),
@@ -271,14 +391,124 @@ impl LlmRelevanceFilter {
             }
         }
 
-        Err(last_error.unwrap_or(GscholarError::Api { 
-            code: 503, 
-            message: "All LLM providers failed".to_string() 
+        Err(last_error.unwrap_or(GscholarError::Api {
+            code: 503,
+            message: "All LLM providers failed".to_string(),
         }))
     }
 
+    /// Score relevance of a single paper (with provider fallback).
+    pub async fn score_relevance(
+        &self,
+        keyword: &str,
+        paper: &PaperInfo,
+        content_filter_help: Option<&str>,
+    ) -> Result<RelevanceScore> {
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| GscholarError::Parse(format!("Semaphore error: {}", e)))?;
+
+        let prompt = build_score_prompt(keyword, paper, content_filter_help);
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: prompt,
+        }];
+
+        let mut last_error = None;
+
+        for provider in &self.providers {
+            debug!(title = %paper.title, provider = %provider.name(), "Sending LLM relevance score request");
+
+            match provider.chat_completion(messages.clone()).await {
+                Ok(answer) => match parse_relevance_score_response(&answer) {
+                    Ok(score) => {
+                        debug!(
+                            title = %paper.title,
+                            provider = %provider.name(),
+                            score = score.score,
+                            "LLM relevance score parsed"
+                        );
+                        return Ok(score);
+                    }
+                    Err(e) => {
+                        warn!(
+                            title = %paper.title,
+                            provider = %provider.name(),
+                            error = %e,
+                            answer = %answer,
+                            "LLM relevance score parse failed, trying next fallback if available"
+                        );
+                        last_error = Some(e);
+                    }
+                },
+                Err(e) => {
+                    warn!(
+                        title = %paper.title,
+                        provider = %provider.name(),
+                        error = %e,
+                        "LLM provider failed during scoring, trying next fallback if available"
+                    );
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or(GscholarError::Api {
+            code: 503,
+            message: "All LLM providers failed".to_string(),
+        }))
+    }
+
+    /// Batch score relevance for multiple papers (with concurrency limit).
+    pub async fn batch_score_relevance(
+        &self,
+        keyword: &str,
+        papers: Vec<PaperInfo>,
+        content_filter_help: Option<&str>,
+    ) -> Vec<Result<RelevanceScore>> {
+        use futures::stream::{self, StreamExt};
+
+        let count = papers.len();
+        let has_context = content_filter_help.is_some();
+        info!(
+            count = count,
+            keyword = keyword,
+            has_context = has_context,
+            primary_provider = %self.providers.first().map(|p| p.name()).unwrap_or("none"),
+            "Starting batch LLM relevance scoring"
+        );
+
+        let context: Option<String> = content_filter_help.map(|s| s.to_string());
+
+        let mut indexed_results: Vec<(usize, Result<RelevanceScore>)> = stream::iter(
+            papers.into_iter().enumerate(),
+        )
+        .map(|(idx, paper)| {
+            let keyword = keyword.to_string();
+            let ctx = context.clone();
+            async move {
+                let result = self.score_relevance(&keyword, &paper, ctx.as_deref()).await;
+                if let Err(error) = &result {
+                    warn!(idx = idx, error = %error, "LLM relevance scoring failed for paper");
+                }
+                (idx, result)
+            }
+        })
+        .buffer_unordered(MAX_CONCURRENT)
+        .collect()
+        .await;
+
+        indexed_results.sort_by_key(|(idx, _)| *idx);
+        indexed_results
+            .into_iter()
+            .map(|(_, result)| result)
+            .collect()
+    }
+
     /// Batch check relevance for multiple papers (with concurrency limit)
-    /// 
+    ///
     /// # Arguments
     /// * `keyword` - Search keyword
     /// * `papers` - Vector of paper information
@@ -304,27 +534,31 @@ impl LlmRelevanceFilter {
         // Clone the context for use in async closures
         let context: Option<String> = content_filter_help.map(|s| s.to_string());
 
-        let mut indexed_results: Vec<(usize, RelevanceResult)> = stream::iter(papers.into_iter().enumerate())
-            .map(|(idx, paper)| {
-                let keyword = keyword.to_string();
-                let ctx = context.clone();
-                async move {
-                    let result = match self.check_relevance(&keyword, &paper, ctx.as_deref()).await {
-                        Ok(result) => result,
-                        Err(e) => {
-                            warn!(idx = idx, error = %e, "LLM check failed, assuming relevant");
-                            RelevanceResult {
-                                is_relevant: true, // Default to relevant on error
-                                reason: Some(format!("Error: {}", e)),
+        let mut indexed_results: Vec<(usize, RelevanceResult)> =
+            stream::iter(papers.into_iter().enumerate())
+                .map(|(idx, paper)| {
+                    let keyword = keyword.to_string();
+                    let ctx = context.clone();
+                    async move {
+                        let result = match self
+                            .check_relevance(&keyword, &paper, ctx.as_deref())
+                            .await
+                        {
+                            Ok(result) => result,
+                            Err(e) => {
+                                warn!(idx = idx, error = %e, "LLM check failed, assuming relevant");
+                                RelevanceResult {
+                                    is_relevant: true, // Default to relevant on error
+                                    reason: Some(format!("Error: {}", e)),
+                                }
                             }
-                        }
-                    };
-                    (idx, result)
-                }
-            })
-            .buffer_unordered(MAX_CONCURRENT)
-            .collect()
-            .await;
+                        };
+                        (idx, result)
+                    }
+                })
+                .buffer_unordered(MAX_CONCURRENT)
+                .collect()
+                .await;
 
         indexed_results.sort_by_key(|(idx, _)| *idx);
         let results: Vec<RelevanceResult> = indexed_results
@@ -402,7 +636,7 @@ mod tests {
         };
         let context = "I need papers about real-time prediction methods";
         let prompt = build_prompt("machine learning", &paper, Some(context));
-        
+
         // Should contain user context
         assert!(prompt.contains("User's Research Focus"));
         assert!(prompt.contains("real-time prediction methods"));
@@ -419,6 +653,31 @@ mod tests {
         // Empty string should be treated as no context
         let prompt = build_prompt("test", &paper, Some("   "));
         assert!(!prompt.contains("User's Research Focus"));
+    }
+
+    #[test]
+    fn test_parse_relevance_score_response_json() {
+        let parsed = parse_relevance_score_response(
+            r#"{"score": 87, "reason": "Directly studies neural prediction of rock strength."}"#,
+        )
+        .expect("parse score response");
+
+        assert_eq!(parsed.score, 87);
+        assert_eq!(
+            parsed.reason.as_deref(),
+            Some("Directly studies neural prediction of rock strength.")
+        );
+    }
+
+    #[test]
+    fn test_parse_relevance_score_response_markdown_and_clamps() {
+        let parsed = parse_relevance_score_response(
+            "```json\n{\"score\": 133, \"reason\": \"Strong match\"}\n```",
+        )
+        .expect("parse markdown score response");
+
+        assert_eq!(parsed.score, 100);
+        assert_eq!(parsed.reason.as_deref(), Some("Strong match"));
     }
 
     #[test]

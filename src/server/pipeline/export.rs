@@ -18,6 +18,8 @@ struct PaperResultCsv {
     if_score: String,
     jci_score: String,
     sci_partition: String,
+    relevance_score: String,
+    relevance_reason: String,
 }
 
 impl From<&PaperResult> for PaperResultCsv {
@@ -35,6 +37,11 @@ impl From<&PaperResult> for PaperResultCsv {
             if_score: p.if_score.clone().unwrap_or_default(),
             jci_score: p.jci_score.clone().unwrap_or_default(),
             sci_partition: p.sci_partition.clone().unwrap_or_default(),
+            relevance_score: p
+                .relevance_score
+                .map(|score| score.to_string())
+                .unwrap_or_default(),
+            relevance_reason: p.relevance_reason.clone().unwrap_or_default(),
         }
     }
 }

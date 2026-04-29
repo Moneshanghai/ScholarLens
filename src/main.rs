@@ -1,4 +1,4 @@
-//! Rscholar - Academic literature search and filter pipeline
+//! ScholarLens - Academic literature search and filter pipeline
 #![forbid(unsafe_code)]
 //!
 //! Supports OpenAlex search, Semantic Scholar enrichment,
@@ -6,12 +6,12 @@
 //!
 //! ## CLI Mode
 //! ```bash
-//! Rscholar search "deep learning" --source openalex --pages 1-3
+//! ScholarLens search "deep learning" --source openalex --pages 1-3
 //! ```
 //!
 //! ## HTTP Server Mode
 //! ```bash
-//! Rscholar server --port 3000
+//! ScholarLens server --port 3000
 //! ```
 
 mod cli;
@@ -40,10 +40,7 @@ async fn main() -> Result<()> {
         .with_thread_ids(false)
         .init();
 
-    info!(
-        debug = parsed_cli.debug,
-        "Rscholar CLI initialized"
-    );
+    info!(debug = parsed_cli.debug, "ScholarLens CLI initialized");
 
     match parsed_cli.command {
         cli::Commands::Search {
@@ -59,7 +56,6 @@ async fn main() -> Result<()> {
             sci_up_top,
             sci_base,
             sci_up,
-
         } => {
             info!(
                 keyword = %keyword,
@@ -80,11 +76,14 @@ async fn main() -> Result<()> {
                 sci_up_top,
                 sci_base,
                 sci_up,
-
             );
             cli::run_search_pipeline(args).await
         }
-        cli::Commands::Server { port, host, serve_static } => {
+        cli::Commands::Server {
+            port,
+            host,
+            serve_static,
+        } => {
             info!(port = ?port, host = ?host, serve_static = ?serve_static, "Executing server command");
             cli::run_api_server(port, host, serve_static).await
         }

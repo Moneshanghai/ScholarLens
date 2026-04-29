@@ -3,8 +3,8 @@
 //! Uses LLM to expand a single keyword into related academic terms,
 //! enabling broader and more accurate literature searches.
 
-use crate::error::{GscholarError, Result};
 use super::{ChatMessage, LlmProvider};
+use crate::error::{GscholarError, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -27,7 +27,7 @@ pub struct KeywordExpansionResult {
 }
 
 /// Build the prompt for keyword expansion
-/// 
+///
 /// Uses the user-provided prompt structure for academic keyword expansion.
 fn build_expansion_prompt(request: &KeywordExpansionRequest) -> String {
     // System prompt with detailed instructions
@@ -64,8 +64,7 @@ JSON schema:
     // User message with the actual keyword and description
     let user_message = format!(
         r#"{{"keyword": "{}", "descript": "{}"}}"#,
-        request.keyword,
-        request.descript
+        request.keyword, request.descript
     );
 
     format!("{}\n\nInput:\n{}", system_prompt, user_message)
@@ -75,7 +74,7 @@ JSON schema:
 fn parse_expansion_response(response: &str) -> Result<KeywordExpansionResult> {
     // Try to extract JSON from the response (LLM might add extra text)
     let json_str = extract_json(response);
-    
+
     serde_json::from_str(&json_str).map_err(|e| {
         warn!(response = %response, error = %e, "Failed to parse keyword expansion response");
         GscholarError::Parse(format!(
@@ -89,14 +88,14 @@ fn parse_expansion_response(response: &str) -> Result<KeywordExpansionResult> {
 /// Extract JSON object from a string (handles markdown code blocks and extra text)
 fn extract_json(text: &str) -> String {
     let text = text.trim();
-    
+
     // Try to find JSON in markdown code block
     if let Some(start) = text.find("```json") {
         if let Some(end) = text[start + 7..].find("```") {
             return text[start + 7..start + 7 + end].trim().to_string();
         }
     }
-    
+
     // Try to find JSON in generic code block
     if let Some(start) = text.find("```") {
         if let Some(end) = text[start + 3..].find("```") {
@@ -108,23 +107,23 @@ fn extract_json(text: &str) -> String {
             return inner.to_string();
         }
     }
-    
+
     // Try to find raw JSON object
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
             return text[start..=end].to_string();
         }
     }
-    
+
     text.to_string()
 }
 
 /// Expand keywords using LLM
-/// 
+///
 /// # Arguments
 /// * `provider` - LLM provider to use for expansion
 /// * `request` - Keyword expansion request with keyword and context
-/// 
+///
 /// # Returns
 /// Expanded keywords result, or error if expansion fails
 pub async fn expand_keywords(
@@ -137,31 +136,31 @@ pub async fn expand_keywords(
         provider = %provider.name(),
         "Starting keyword expansion"
     );
-    
+
     let prompt = build_expansion_prompt(request);
-    
+
     let messages = vec![ChatMessage {
         role: "user".to_string(),
         content: prompt,
     }];
-    
+
     let response = provider.chat_completion(messages).await?;
-    
+
     debug!(
         keyword = %request.keyword,
         response = %response,
         "Received keyword expansion response"
     );
-    
+
     let result = parse_expansion_response(&response)?;
-    
+
     info!(
         keyword = %request.keyword,
         expanded_count = result.extended_keywords.len(),
         expanded = ?result.extended_keywords,
         "Keyword expansion complete"
     );
-    
+
     Ok(result)
 }
 
@@ -173,10 +172,12 @@ mod tests {
     fn test_parse_valid_response() {
         let response = r#"{"keyword": "LWD", "extended_keywords": ["logging while drilling", "MWD", "wellbore measurement"]}"#;
         let result = parse_expansion_response(response).unwrap();
-        
+
         assert_eq!(result.keyword, "LWD");
         assert_eq!(result.extended_keywords.len(), 3);
-        assert!(result.extended_keywords.contains(&"logging while drilling".to_string()));
+        assert!(result
+            .extended_keywords
+            .contains(&"logging while drilling".to_string()));
     }
 
     #[test]
@@ -185,7 +186,7 @@ mod tests {
 {"keyword": "ML", "extended_keywords": ["machine learning", "deep learning"]}
 ```"#;
         let result = parse_expansion_response(response).unwrap();
-        
+
         assert_eq!(result.keyword, "ML");
         assert_eq!(result.extended_keywords.len(), 2);
     }
@@ -196,7 +197,7 @@ mod tests {
 {"keyword": "AI", "extended_keywords": ["artificial intelligence", "neural network"]}
 Hope this helps!"#;
         let result = parse_expansion_response(response).unwrap();
-        
+
         assert_eq!(result.keyword, "AI");
         assert_eq!(result.extended_keywords.len(), 2);
     }
@@ -208,7 +209,7 @@ Hope this helps!"#;
             descript: "Logging While Drilling for oil and gas".to_string(),
         };
         let prompt = build_expansion_prompt(&request);
-        
+
         assert!(prompt.contains("LWD"));
         assert!(prompt.contains("Logging While Drilling"));
         assert!(prompt.contains("extended_keywords"));
@@ -220,11 +221,11 @@ Hope this helps!"#;
         // Test raw JSON
         let json = extract_json(r#"{"key": "value"}"#);
         assert_eq!(json, r#"{"key": "value"}"#);
-        
+
         // Test with markdown
         let json = extract_json("```json\n{\"key\": \"value\"}\n```");
         assert_eq!(json, "{\"key\": \"value\"}");
-        
+
         // Test with extra text
         let json = extract_json("Result: {\"key\": \"value\"} end");
         assert_eq!(json, "{\"key\": \"value\"}");

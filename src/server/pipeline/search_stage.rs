@@ -1,7 +1,9 @@
 use std::time::Instant;
 use tracing::{info, warn};
 
-use crate::server::config::{SearchArxivSection, SearchPubMedSection, SearchXRxivSection};
+use crate::server::config::{
+    SearchArxivSection, SearchPubMedSection, SearchSemanticScholarSection, SearchXRxivSection,
+};
 use crate::{arxiv, openalex, pubmed, semanticscholar, xrxiv};
 use futures::stream::{self, StreamExt};
 
@@ -65,6 +67,7 @@ pub(super) async fn run_parallel_search(
     ss_limit: usize,
     oa_limit: usize,
     enabled_sources: &[String],
+    semantic_scholar_cfg: &SearchSemanticScholarSection,
     arxiv_cfg: &SearchArxivSection,
     pubmed_cfg: &SearchPubMedSection,
     xrxiv_cfg: &SearchXRxivSection,
@@ -87,14 +90,39 @@ pub(super) async fn run_parallel_search(
         .map(|source| async move {
             let source_started = Instant::now();
             let result = match source.as_str() {
-                "semanticscholar" => run_semantic_scholar_source(task_id, keyword, ylo, ss_limit).await,
+                "semanticscholar" => {
+                    run_semantic_scholar_source(task_id, keyword, ylo, ss_limit, semantic_scholar_cfg)
+                        .await
+                }
                 "openalex" => run_openalex_source(task_id, oa_query, ylo, oa_limit).await,
                 "arxiv" => run_arxiv_source(task_id, keyword, ylo, arxiv_cfg).await,
                 "pubmed" => run_pubmed_source(task_id, keyword, ylo, pubmed_cfg).await,
-                "biorxiv" => run_xrxiv_source(task_id, keyword, xrxiv::XRxivServer::BioRxiv, ylo, xrxiv_cfg).await,
-                "medrxiv" => run_xrxiv_source(task_id, keyword, xrxiv::XRxivServer::MedRxiv, ylo, xrxiv_cfg).await,
+                "biorxiv" => {
+                    run_xrxiv_source(
+                        task_id,
+                        keyword,
+                        xrxiv::XRxivServer::BioRxiv,
+                        ylo,
+                        xrxiv_cfg,
+                    )
+                    .await
+                }
+                "medrxiv" => {
+                    run_xrxiv_source(
+                        task_id,
+                        keyword,
+                        xrxiv::XRxivServer::MedRxiv,
+                        ylo,
+                        xrxiv_cfg,
+                    )
+                    .await
+                }
                 other => {
-                    warn!(task_id = task_id, source = other, "Search source is not implemented, skipping");
+                    warn!(
+                        task_id = task_id,
+                        source = other,
+                        "Search source is not implemented, skipping"
+                    );
                     SourceExecutionResult {
                         papers: Vec::new(),
                         error: Some("Search source is not implemented".to_string()),
@@ -125,7 +153,9 @@ pub(super) async fn run_parallel_search(
 
     for (source, result) in source_results {
         // Record per-source count (before merge/dedup)
-        stage_result.source_counts.push((source.clone(), result.papers.len()));
+        stage_result
+            .source_counts
+            .push((source.clone(), result.papers.len()));
 
         if let Some(err) = result.error {
             stage_result.failed_sources.push((source.clone(), err));
@@ -173,7 +203,12 @@ async fn run_arxiv_source(
             let filtered_results = if let Some(year_from) = ylo {
                 results
                     .into_iter()
-                    .filter(|r| r.year.parse::<i32>().map(|y| y >= year_from).unwrap_or(false))
+                    .filter(|r| {
+                        r.year
+                            .parse::<i32>()
+                            .map(|y| y >= year_from)
+                            .unwrap_or(false)
+                    })
                     .collect::<Vec<_>>()
             } else {
                 results
@@ -190,21 +225,21 @@ async fn run_arxiv_source(
             );
             SourceExecutionResult {
                 papers: filtered_results
-                .into_iter()
-                .map(|r| PaperResult {
-                    title: r.title,
-                    authors: r.authors,
-                    year: r.year,
-                    venue: "arXiv".to_string(),
-                    doi: r.doi,
-                    url: r.url,
-                    pdf_url: r.pdf_url,
-                    snippet: String::new(),
-                    abstract_text: r.abstract_text,
-                    source: "arxiv".to_string(),
-                    ..Default::default()
-                })
-                .collect(),
+                    .into_iter()
+                    .map(|r| PaperResult {
+                        title: r.title,
+                        authors: r.authors,
+                        year: r.year,
+                        venue: "arXiv".to_string(),
+                        doi: r.doi,
+                        url: r.url,
+                        pdf_url: r.pdf_url,
+                        snippet: String::new(),
+                        abstract_text: r.abstract_text,
+                        source: "arxiv".to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
                 error: None,
             }
         }
@@ -277,21 +312,21 @@ async fn run_pubmed_source(
             );
             SourceExecutionResult {
                 papers: results
-                .into_iter()
-                .map(|r| PaperResult {
-                    title: r.title,
-                    authors: r.authors,
-                    year: r.year,
-                    venue: r.venue,
-                    doi: r.doi,
-                    url: r.url,
-                    pdf_url: String::new(),
-                    snippet: String::new(),
-                    abstract_text: r.abstract_text,
-                    source: "pubmed".to_string(),
-                    ..Default::default()
-                })
-                .collect(),
+                    .into_iter()
+                    .map(|r| PaperResult {
+                        title: r.title,
+                        authors: r.authors,
+                        year: r.year,
+                        venue: r.venue,
+                        doi: r.doi,
+                        url: r.url,
+                        pdf_url: String::new(),
+                        snippet: String::new(),
+                        abstract_text: r.abstract_text,
+                        source: "pubmed".to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
                 error: None,
             }
         }
@@ -361,21 +396,21 @@ async fn run_xrxiv_source(
             );
             SourceExecutionResult {
                 papers: results
-                .into_iter()
-                .map(|r| PaperResult {
-                    title: r.title,
-                    authors: r.authors,
-                    year: r.year,
-                    venue: r.venue.clone(),
-                    doi: r.doi,
-                    url: r.url,
-                    pdf_url: r.pdf_url,
-                    snippet: String::new(),
-                    abstract_text: r.abstract_text,
-                    source: r.venue.to_lowercase(),
-                    ..Default::default()
-                })
-                .collect(),
+                    .into_iter()
+                    .map(|r| PaperResult {
+                        title: r.title,
+                        authors: r.authors,
+                        year: r.year,
+                        venue: r.venue.clone(),
+                        doi: r.doi,
+                        url: r.url,
+                        pdf_url: r.pdf_url,
+                        snippet: String::new(),
+                        abstract_text: r.abstract_text,
+                        source: r.venue.to_lowercase(),
+                        ..Default::default()
+                    })
+                    .collect(),
                 error: None,
             }
         }
@@ -399,8 +434,15 @@ async fn run_semantic_scholar_source(
     keyword: &str,
     ylo: Option<i32>,
     ss_limit: usize,
+    cfg: &SearchSemanticScholarSection,
 ) -> SourceExecutionResult {
-    match semanticscholar::search_papers(keyword, ylo, ss_limit, None).await {
+    let api_key = cfg.api_key.trim();
+    let api_key = if api_key.is_empty() {
+        None
+    } else {
+        Some(api_key)
+    };
+    match semanticscholar::search_papers(keyword, ylo, ss_limit, api_key).await {
         Ok(results) => {
             info!(
                 task_id = task_id,
@@ -411,21 +453,21 @@ async fn run_semantic_scholar_source(
             );
             SourceExecutionResult {
                 papers: results
-                .into_iter()
-                .map(|r| PaperResult {
-                    title: r.title,
-                    authors: r.authors,
-                    year: r.year,
-                    venue: r.venue,
-                    doi: r.doi,
-                    url: r.url,
-                    pdf_url: r.pdf_url,
-                    snippet: String::new(),
-                    abstract_text: r.ss_abstract,
-                    source: "semanticscholar".to_string(),
-                    ..Default::default()
-                })
-                .collect::<Vec<_>>(),
+                    .into_iter()
+                    .map(|r| PaperResult {
+                        title: r.title,
+                        authors: r.authors,
+                        year: r.year,
+                        venue: r.venue,
+                        doi: r.doi,
+                        url: r.url,
+                        pdf_url: r.pdf_url,
+                        snippet: String::new(),
+                        abstract_text: r.ss_abstract,
+                        source: "semanticscholar".to_string(),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>(),
                 error: None,
             }
         }
@@ -456,7 +498,12 @@ async fn run_openalex_source(
         ylo,
         ..Default::default()
     };
-    info!(task_id = task_id, query = oa_query, oa_limit = oa_limit, "Starting OpenAlex search");
+    info!(
+        task_id = task_id,
+        query = oa_query,
+        oa_limit = oa_limit,
+        "Starting OpenAlex search"
+    );
     match openalex::query(oa_query, &options).await {
         Ok(results) => {
             let selected = results.into_iter().take(oa_limit).collect::<Vec<_>>();
@@ -469,21 +516,21 @@ async fn run_openalex_source(
             );
             SourceExecutionResult {
                 papers: selected
-                .into_iter()
-                .map(|r| PaperResult {
-                    title: r.title,
-                    authors: r.author,
-                    year: r.year,
-                    venue: r.venue,
-                    doi: r.doi,
-                    url: r.article_url,
-                    pdf_url: r.pdf_url,
-                    snippet: r.snippet.clone(),
-                    abstract_text: r.snippet,
-                    source: "openalex".to_string(),
-                    ..Default::default()
-                })
-                .collect::<Vec<_>>(),
+                    .into_iter()
+                    .map(|r| PaperResult {
+                        title: r.title,
+                        authors: r.author,
+                        year: r.year,
+                        venue: r.venue,
+                        doi: r.doi,
+                        url: r.article_url,
+                        pdf_url: r.pdf_url,
+                        snippet: r.snippet.clone(),
+                        abstract_text: r.snippet,
+                        source: "openalex".to_string(),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>(),
                 error: None,
             }
         }

@@ -1,4 +1,4 @@
-//! # Rscholar
+//! # ScholarLens
 #![forbid(unsafe_code)]
 //!
 //! Academic literature search and filter pipeline - Rust Microservice
@@ -49,10 +49,10 @@ pub mod error;
 pub mod ranking;
 pub use ranking as rankings; // Backward compat alias
 
+pub mod llm;
 pub mod server;
 pub mod traffic;
 pub mod unified;
-pub mod llm;
 
 // Data sources (reorganized)
 pub mod sources;

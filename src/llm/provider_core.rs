@@ -60,7 +60,9 @@ pub trait ProviderTrial: Send + Sync {
     async fn execute_trial(&self, messages: Vec<ChatMessage>) -> Result<String> {
         let runtime = self.runtime();
         let payload = self.build_payload(messages);
-        let payload_size = serde_json::to_string(&payload).map(|s| s.len()).unwrap_or(0);
+        let payload_size = serde_json::to_string(&payload)
+            .map(|s| s.len())
+            .unwrap_or(0);
 
         debug!(
             provider = runtime.provider_name,

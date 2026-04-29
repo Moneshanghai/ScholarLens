@@ -1,11 +1,11 @@
-//! Custom error types for Rscholar.
+//! Custom error types for ScholarLens.
 //!
 //! This module defines all error types used throughout the application.
 //! All functions return `Result<T, GscholarError>` instead of using `unwrap()`.
 
 use thiserror::Error;
 
-/// Main error type for Rscholar operations.
+/// Main error type for ScholarLens operations.
 ///
 /// Uses `thiserror` for ergonomic error handling and automatic `Display` implementation.
 #[derive(Debug, Error)]

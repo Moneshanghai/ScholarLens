@@ -43,17 +43,19 @@ main() {
     cargo build --release
 
     BIN_PATH=""
-    if [[ -x "$SCRIPT_DIR/target/release/Rscholar" ]]; then
+    if [[ -x "$SCRIPT_DIR/target/release/ScholarLens" ]]; then
+        BIN_PATH="$SCRIPT_DIR/target/release/ScholarLens"
+    elif [[ -x "$SCRIPT_DIR/target/release/Rscholar" ]]; then
         BIN_PATH="$SCRIPT_DIR/target/release/Rscholar"
     elif [[ -x "$SCRIPT_DIR/target/release/rscholar" ]]; then
         BIN_PATH="$SCRIPT_DIR/target/release/rscholar"
     else
-        echo -e "${RED}[错误] 未找到后端可执行文件 (Rscholar/rscholar)${NC}"
+        echo -e "${RED}[错误] 未找到后端可执行文件 (ScholarLens/Rscholar/rscholar)${NC}"
         exit 1
     fi
 
     echo ""
-    echo -e "${GREEN}Rscholar 启动${NC}"
+    echo -e "${GREEN}ScholarLens 启动${NC}"
     echo -e "  URL   : http://localhost:${PORT}"
     echo -e "  Static: ${DIST_DIR}"
     echo -e "  Bin   : ${BIN_PATH}"

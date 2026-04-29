@@ -1,5 +1,5 @@
 /**
- * RustScholar API Client
+ * ScholarLens API Client
  * Handles all communication with the backend through the proxy
  */
 
@@ -44,13 +44,31 @@ export async function getTaskStatus(taskId) {
 }
 
 /**
+ * Fetch persisted task history from the backend database.
+ * @param {Object} options
+ * @param {number} options.limit - Maximum items to return
+ * @returns {Promise<Object>} Task history response
+ */
+export async function fetchTaskHistory({ limit = 50 } = {}) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    const response = await fetch(`${API_BASE}/tasks?${params.toString()}`);
+
+    if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`获取历史记录失败: ${error}`);
+    }
+
+    return response.json();
+}
+
+/**
  * Download CSV results
  * @param {string} taskId - Task ID
  */
 export function downloadCSV(taskId) {
     const link = document.createElement('a');
     link.href = `${API_BASE}/tasks/${taskId}/download`;
-    link.download = `rustscholar_${taskId}.csv`;
+    link.download = `scholarlens_${taskId}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -63,7 +81,7 @@ export function downloadCSV(taskId) {
 export function downloadBibTeX(taskId) {
     const link = document.createElement('a');
     link.href = `${API_BASE}/tasks/${taskId}/bibtex`;
-    link.download = `rustscholar_${taskId}.bib`;
+    link.download = `scholarlens_${taskId}.bib`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

@@ -14,9 +14,9 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::debug;
 
-/// Rscholar - Academic literature search and filter pipeline
+/// ScholarLens - Academic literature search and filter pipeline
 #[derive(Parser)]
-#[command(name = "Rscholar")]
+#[command(name = "ScholarLens")]
 #[command(version, about, long_about = None)]
 pub struct Cli {
     /// Enable debug logging
@@ -80,7 +80,6 @@ pub enum Commands {
         sci_up: Option<String>,
     },
 
-
     /// Run as HTTP API server (production)
     Server {
         /// Port to listen on (overrides RUSTGSCHOLAR_PORT env var)
@@ -118,7 +117,6 @@ pub struct SearchArgs {
     pub sci_up_top: Option<String>,
     pub sci_base: Option<String>,
     pub sci_up: Option<String>,
-
 }
 
 impl SearchArgs {
@@ -136,7 +134,6 @@ impl SearchArgs {
         sci_up_top: Option<String>,
         sci_base: Option<String>,
         sci_up: Option<String>,
-
     ) -> Self {
         debug!(
             keyword = %keyword,
@@ -159,7 +156,6 @@ impl SearchArgs {
             sci_up_top,
             sci_base,
             sci_up,
-
         }
     }
 }

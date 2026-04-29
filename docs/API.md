@@ -1,4 +1,4 @@
-﻿# Rscholar API Documentation
+# ScholarLens API Documentation
 
 This document describes the current HTTP API implemented under `src/server/`.
 
@@ -55,6 +55,8 @@ Submit async search pipeline task.
 | `content_help` | string | no | User research intent; enables LLM expansion/relevance stages |
 | `source_include` | string[] | no | Source allow-list |
 | `source_exclude` | string[] | no | Source deny-list |
+| `sort_by` | string | no | Final result sort key. Supported: `relevance` (default), `impact_factor`, `has_pdf` |
+| `sort_order` | string | no | Final result sort order for `has_pdf`. Supported: `desc` (PDF first) or `asc` |
 
 Supported source values:
 
@@ -68,6 +70,8 @@ Supported source values:
 ### Important Runtime Rules
 
 - Unknown source names return validation error.
+- External source 429s are retried a finite number of times. If one source remains rate-limited, the task continues with other sources and reports the failed source in `source_errors`.
+- Semantic Scholar supports optional `search.semanticscholar.api_key`; it is recommended because unauthenticated requests share stricter limits.
 - If ranking filters (`sciif`, `jci`, `sci`) are set but no EasyScholar keys are configured, request is rejected.
 - Non-English keyword may be translated to English before search.
 - Keyword expansion uses translated English keyword.
@@ -84,7 +88,9 @@ Supported source values:
   "llm_strict_filter": false,
   "content_help": "关注机器学习和人工智能的应用",
   "source_include": ["openalex", "arxiv", "pubmed"],
-  "source_exclude": ["semanticscholar"]
+  "source_exclude": ["semanticscholar"],
+  "sort_by": "has_pdf",
+  "sort_order": "desc"
 }
 ```
 
@@ -104,6 +110,50 @@ Supported source values:
 {
   "error": "Configuration error",
   "details": "Unsupported source(s): foo. Supported sources: openalex, semanticscholar, arxiv, pubmed, biorxiv, medrxiv"
+}
+```
+
+### Source Configuration Notes
+
+```toml
+[search.semanticscholar]
+enabled = true
+max_results = 100
+api_key = "" # optional, recommended to reduce shared throttling
+timeout_sec = 30
+
+[search.arxiv]
+enabled = true
+request_delay_ms = 3000 # arXiv requests are serialized process-wide
+```
+
+## `GET /tasks`
+
+List persisted task history for restoring the frontend history sidebar after memory cleanup or server restart.
+
+### Query Params
+
+- `page`: page number, defaults to `1`
+- `limit`: items per page, defaults to `50`, maximum `100`
+- `status`: optional, one of `pending`, `running`, `completed`, `failed`
+
+### Response `200`
+
+```json
+{
+  "items": [
+    {
+      "task_id": "550e8400-e29b-41d4-a716-446655440000",
+      "keyword": "rock strength prediction",
+      "status": "completed",
+      "progress_percent": 100,
+      "created_at": 1700000000000,
+      "updated_at": 1700000120000
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "limit": 50
 }
 ```
 

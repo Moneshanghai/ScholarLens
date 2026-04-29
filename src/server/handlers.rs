@@ -8,12 +8,12 @@ use super::state::AppState;
 use super::task::{Task, TaskStatus};
 use crate::db::tasks as db_tasks;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 // ============================================================================
@@ -61,6 +61,35 @@ pub struct PipelineResponse {
     pub task_id: String,
     pub status: String,
     pub eta_seconds: u64,
+}
+
+/// Query params for GET /tasks history list.
+#[derive(Debug, Deserialize)]
+pub struct TaskListQuery {
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+    pub status: Option<String>,
+}
+
+/// Lightweight task history response for the frontend sidebar.
+#[derive(Debug, Serialize)]
+pub struct TaskListResponse {
+    pub items: Vec<TaskSummaryResponse>,
+    pub total: i64,
+    pub page: u32,
+    pub limit: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskSummaryResponse {
+    pub task_id: String,
+    pub keyword: String,
+    pub status: String,
+    pub progress_percent: u8,
+    pub created_at: i64,
+    pub updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Task status response
@@ -117,7 +146,10 @@ async fn get_task_with_fallback(
 
     // Fallback to database (for tasks after server restart)
     let task_id_owned = task_id.to_string();
-    match state.run_db(move |conn| db_tasks::get_by_id(conn, &task_id_owned)).await {
+    match state
+        .run_db(move |conn| db_tasks::get_by_id(conn, &task_id_owned))
+        .await
+    {
         Ok(Some(db_task)) => {
             // Convert DB task to memory task
             let mem_task = Task::from_db_task(&db_task);
@@ -144,6 +176,31 @@ async fn get_task_with_fallback(
                 }),
             ))
         }
+    }
+}
+
+fn task_summary_from_db_task(task: db_tasks::Task) -> TaskSummaryResponse {
+    TaskSummaryResponse {
+        task_id: task.id,
+        keyword: task.keyword.unwrap_or_else(|| "未命名检索".to_string()),
+        status: db_task_status_as_str(&task.status).to_string(),
+        progress_percent: task.progress.percent,
+        created_at: seconds_to_millis(task.created_at),
+        updated_at: seconds_to_millis(task.updated_at),
+        error: task.error,
+    }
+}
+
+fn seconds_to_millis(seconds: i64) -> i64 {
+    seconds.saturating_mul(1000)
+}
+
+fn db_task_status_as_str(status: &db_tasks::TaskStatus) -> &'static str {
+    match status {
+        db_tasks::TaskStatus::Pending => "pending",
+        db_tasks::TaskStatus::Running => "running",
+        db_tasks::TaskStatus::Completed => "completed",
+        db_tasks::TaskStatus::Failed => "failed",
     }
 }
 
@@ -183,8 +240,53 @@ pub async fn sources_handler(State(state): State<AppState>) -> Json<SourcesRespo
     Json(SourcesResponse { sources })
 }
 
+/// GET /tasks - List persisted task history.
+///
+/// This reads from SQLite so history remains visible after memory cleanup or restart.
+pub async fn task_list_handler(
+    State(state): State<AppState>,
+    Query(query): Query<TaskListQuery>,
+) -> Result<Json<TaskListResponse>, ApiError> {
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+    let status_filter = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase);
+
+    if let Some(status) = status_filter.as_deref() {
+        if !matches!(status, "pending" | "running" | "completed" | "failed") {
+            return Err(ApiError {
+                error: "Validation error".to_string(),
+                details: Some(format!(
+                    "Unsupported status '{}'. Supported values: pending, running, completed, failed",
+                    status
+                )),
+            });
+        }
+    }
+
+    let status_filter_for_db = status_filter.clone();
+    let (tasks, total) = state
+        .run_db(move |conn| db_tasks::list(conn, page, limit, status_filter_for_db.as_deref()))
+        .await
+        .map_err(|e| ApiError {
+            error: "Database error".to_string(),
+            details: Some(e.to_string()),
+        })?;
+
+    Ok(Json(TaskListResponse {
+        items: tasks.into_iter().map(task_summary_from_db_task).collect(),
+        total,
+        page,
+        limit,
+    }))
+}
+
 /// POST /tasks - Submit a new pipeline job
-/// 
+///
 /// Uses DB-first pattern: task is persisted to database before returning task_id.
 /// This ensures task can be queried even after server restart.
 pub async fn pipeline_handler(
@@ -210,6 +312,8 @@ pub async fn pipeline_handler(
         state.config.search.ss_limit,
         state.config.search.oa_limit,
         &state.config.search.effective_sources(),
+        &state.config.search.openalex,
+        &state.config.search.semanticscholar,
         &state.config.search.arxiv,
         &state.config.search.pubmed,
         &state.config.search.xrxiv,
@@ -230,7 +334,10 @@ pub async fn pipeline_handler(
 
     // Write to DB first - if this fails, don't return task_id
     let db_task_clone = db_task.clone();
-    if let Err(e) = state.run_db(move |conn| db_tasks::insert(conn, &db_task_clone)).await {
+    if let Err(e) = state
+        .run_db(move |conn| db_tasks::insert(conn, &db_task_clone))
+        .await
+    {
         error!(error = %e, "Failed to persist task to database");
         return Err(ApiError {
             error: "Failed to create task".to_string(),
@@ -266,9 +373,8 @@ pub async fn pipeline_handler(
     }))
 }
 
-
 /// GET /tasks/{id} - Get task status and result
-/// 
+///
 /// Uses fallback pattern: try memory cache first, then database.
 /// This enables task retrieval after server restart.
 pub async fn task_status_handler(
@@ -305,9 +411,8 @@ pub async fn task_status_handler(
     }))
 }
 
-
 /// GET /tasks/{id}/download - Download CSV result
-/// 
+///
 /// Uses fallback pattern for task lookup to support retrieval after server restart.
 pub async fn task_download_handler(
     State(state): State<AppState>,
@@ -325,18 +430,15 @@ pub async fn task_download_handler(
         ));
     }
 
-    let csv_path = task
-        .result
-        .and_then(|r| r.csv_path)
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiError {
-                    error: "No CSV file available".to_string(),
-                    details: None,
-                }),
-            )
-        })?;
+    let csv_path = task.result.and_then(|r| r.csv_path).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "No CSV file available".to_string(),
+                details: None,
+            }),
+        )
+    })?;
 
     // Read CSV file
     let content = std::fs::read_to_string(&csv_path).map_err(|e| {
@@ -373,9 +475,9 @@ pub async fn task_download_handler(
 }
 
 /// GET /tasks/:id/bibtex - Download BibTeX bibliography file
-/// 
+///
 /// Generates a BibTeX file from the task results for use with LaTeX/citation managers.
-/// 
+///
 /// Uses fallback pattern for task lookup to support retrieval after server restart.
 pub async fn task_bibtex_handler(
     State(state): State<AppState>,
@@ -423,7 +525,7 @@ pub async fn task_bibtex_handler(
             ));
         }
     };
-    
+
     if papers.is_empty() {
         return Err((
             StatusCode::NOT_FOUND,
@@ -484,17 +586,17 @@ struct BibTexPaper {
 }
 
 /// Generate BibTeX content from a list of papers
-/// 
+///
 /// Each paper is formatted as a BibTeX @article entry with:
 /// - Citation key: `{first_author_lastname}{year}_{index}`
 /// - Required fields: title, author, year, journal
 /// - Optional fields: doi, url, abstract
 fn generate_bibtex(papers: &[BibTexPaper], task_id: &str) -> String {
     let mut entries = Vec::new();
-    
+
     // Add header comment
     entries.push(format!(
-        "% BibTeX bibliography generated by Rscholar\n% Task ID: {}\n% Generated: {}\n% Total entries: {}\n",
+        "% BibTeX bibliography generated by ScholarLens\n% Task ID: {}\n% Generated: {}\n% Total entries: {}\n",
         task_id,
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
         papers.len()
@@ -514,67 +616,83 @@ fn generate_bibtex(papers: &[BibTexPaper], task_id: &str) -> String {
 /// Example: Smith2024_001
 fn generate_citation_key(paper: &BibTexPaper, index: usize) -> String {
     // Extract first author's last name
-    let first_author = paper.authors.split(&[',', ';', '&'][..])
+    let first_author = paper
+        .authors
+        .split(&[',', ';', '&'][..])
         .next()
         .unwrap_or("Unknown")
         .trim();
-    
+
     // Get last name (assume format "First Last" or "Last, First")
     let last_name = if first_author.contains(',') {
         // Format: "Last, First"
-        first_author.split(',').next().unwrap_or(first_author).trim()
+        first_author
+            .split(',')
+            .next()
+            .unwrap_or(first_author)
+            .trim()
     } else {
         // Format: "First Last" - get last word
-        first_author.split_whitespace().last().unwrap_or(first_author)
+        first_author
+            .split_whitespace()
+            .last()
+            .unwrap_or(first_author)
     };
-    
+
     // Clean the last name (remove non-alphanumeric)
-    let clean_name: String = last_name
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .collect();
-    
-    let year = if paper.year.is_empty() { "NoYear" } else { &paper.year };
-    
+    let clean_name: String = last_name.chars().filter(|c| c.is_alphanumeric()).collect();
+
+    let year = if paper.year.is_empty() {
+        "NoYear"
+    } else {
+        &paper.year
+    };
+
     format!("{}{}_{:03}", clean_name, year, index + 1)
 }
 
 /// Format a single BibTeX entry
 fn format_bibtex_entry(paper: &BibTexPaper, citation_key: &str) -> String {
     let mut entry = format!("@article{{{},\n", citation_key);
-    
+
     // Title (required)
     entry.push_str(&format!("  title = {{{}}},\n", escape_bibtex(&paper.title)));
-    
+
     // Author (required) - convert to BibTeX format "Last, First and Last2, First2"
     let authors = format_authors_bibtex(&paper.authors);
     entry.push_str(&format!("  author = {{{}}},\n", authors));
-    
+
     // Year (required)
     if !paper.year.is_empty() {
         entry.push_str(&format!("  year = {{{}}},\n", paper.year));
     }
-    
+
     // Journal/Venue
     if !paper.venue.is_empty() {
-        entry.push_str(&format!("  journal = {{{}}},\n", escape_bibtex(&paper.venue)));
+        entry.push_str(&format!(
+            "  journal = {{{}}},\n",
+            escape_bibtex(&paper.venue)
+        ));
     }
-    
+
     // DOI
     if !paper.doi.is_empty() {
         entry.push_str(&format!("  doi = {{{}}},\n", paper.doi));
     }
-    
+
     // URL
     if !paper.url.is_empty() {
         entry.push_str(&format!("  url = {{{}}},\n", paper.url));
     }
-    
+
     // Abstract
     if !paper.abstract_text.is_empty() {
-        entry.push_str(&format!("  abstract = {{{}}},\n", escape_bibtex(&paper.abstract_text)));
+        entry.push_str(&format!(
+            "  abstract = {{{}}},\n",
+            escape_bibtex(&paper.abstract_text)
+        ));
     }
-    
+
     entry.push_str("}\n");
     entry
 }
@@ -600,12 +718,12 @@ fn format_authors_bibtex(authors: &str) -> String {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-    
+
     // If only one author with no comma, just return as-is
     if author_list.len() == 1 && !authors.contains(',') {
         return escape_bibtex(authors.trim());
     }
-    
+
     // Join with " and " for BibTeX
     author_list
         .iter()
@@ -649,5 +767,22 @@ mod tests {
         };
         let json = serde_json::to_string(&response);
         assert!(json.is_ok());
+    }
+
+    #[test]
+    fn test_task_summary_from_db_task_maps_history_fields() {
+        let mut task = db_tasks::Task::new("rock strength prediction", "combined");
+        task.id = "task-1".to_string();
+        task.status = db_tasks::TaskStatus::Completed;
+        task.created_at = 1_700_000_000;
+        task.updated_at = 1_700_000_120;
+
+        let summary = task_summary_from_db_task(task);
+
+        assert_eq!(summary.task_id, "task-1");
+        assert_eq!(summary.keyword, "rock strength prediction");
+        assert_eq!(summary.status, "completed");
+        assert_eq!(summary.created_at, 1_700_000_000_000);
+        assert_eq!(summary.updated_at, 1_700_000_120_000);
     }
 }

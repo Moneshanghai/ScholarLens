@@ -1,9 +1,9 @@
-﻿# Rscholar
+# ScholarLens
 [English](./README.md) [中文](./README_zh.md)
 
 [Example web](http://c76d.abrdns.com/) : http://c76d.abrdns.com/ 
 
-Rscholar is a Rust-based academic literature search service with asynchronous task execution, multi-source retrieval, metadata enrichment, ranking filters, and CSV/BibTeX export.
+ScholarLens is a Rust-based academic literature search service with asynchronous task execution, multi-source retrieval, metadata enrichment, ranking filters, and CSV/BibTeX export.
 
 This document reflects the current code in `src/`.
 
@@ -24,6 +24,7 @@ This document reflects the current code in `src/`.
 - Applies ranking filters (`sciif`, `jci`, `sci`)
   - Preprint venues are not filtered out by ranking criteria
 - Applies optional LLM relevance filtering when `content_help` is provided
+- Scores and sorts final results by relevance by default (`sort_by = "relevance"`)
 - Exports:
   - Task JSON result
   - `results.csv`
@@ -75,15 +76,16 @@ The script automatically:
   - Unknown source names in `source_include` return validation error
 - Request-level `enable_llm_filter` was removed
   - Whether LLM filtering runs is decided by pipeline conditions (`content_help` + provider availability)
+- Default output ordering is relevance-first; use `sort_by = "impact_factor"` to keep IF-first ordering.
 - Output directory naming format is:
   - `output/{timestamp}_{keyword}`
 
 ## Runtime Modes
 
 - HTTP server mode (primary):
-  - `Rscholar server --port 3000 --serve-static front/dist`
+  - `ScholarLens server --port 3000 --serve-static front/dist`
 - CLI search mode (legacy/auxiliary):
-  - `Rscholar search ...`
+  - `ScholarLens search ...`
 
 
 ## API Overview
@@ -116,6 +118,7 @@ Supported request JSON fields:
 - `sci`
 - `llm_strict_filter`
 - `content_help`
+- `sort_by` (`relevance` by default, or `impact_factor`)
 - `source_include`
 - `source_exclude`
 
@@ -137,8 +140,9 @@ Notes:
 7. Ranking lookup and assignment
 8. Ranking filter (`sciif`/`jci`/`sci`, preprints exempt)
 9. LLM relevance filter (only when `content_help` is non-empty)
-10. Fallback handling (strict vs non-strict)
-11. CSV save + analytics logging + task completion
+10. Relevance scoring and final sorting
+11. Fallback handling (strict vs non-strict)
+12. CSV save + analytics logging + task completion
 
 ## Project Layout
 

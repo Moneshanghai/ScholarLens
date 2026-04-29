@@ -1,7 +1,7 @@
 {
-  "name": "rscholar-front",
+  "name": "scholarlens-front",
   "version": "1.0.0",
-  "description": "Rscholar Frontend - Academic Literature Search Interface",
+  "description": "ScholarLens Frontend - Academic Literature Search Interface",
   "type": "module",
   "scripts": {
     "dev": "vite",

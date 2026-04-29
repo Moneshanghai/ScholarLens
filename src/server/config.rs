@@ -90,10 +90,10 @@ pub struct SearchSection {
     /// If set and non-empty, overrides the per-source flags for pipeline.
     #[serde(default)]
     pub enabled_sources: Vec<String>,
-    /// Kept for backward compat; prefer openalex.max_results
+    /// Kept for backward compat; prefer semanticscholar.max_results
     #[serde(default = "default_ss_limit")]
     pub ss_limit: usize,
-    /// Kept for backward compat; prefer semanticscholar.max_results
+    /// Kept for backward compat; prefer openalex.max_results
     #[serde(default = "default_oa_limit")]
     pub oa_limit: usize,
     #[serde(default)]
@@ -116,10 +116,18 @@ impl SearchSection {
             return self.enabled_sources.clone();
         }
         let mut out = Vec::new();
-        if self.openalex.enabled { out.push("openalex".to_string()); }
-        if self.semanticscholar.enabled { out.push("semanticscholar".to_string()); }
-        if self.arxiv.enabled { out.push("arxiv".to_string()); }
-        if self.pubmed.enabled { out.push("pubmed".to_string()); }
+        if self.openalex.enabled {
+            out.push("openalex".to_string());
+        }
+        if self.semanticscholar.enabled {
+            out.push("semanticscholar".to_string());
+        }
+        if self.arxiv.enabled {
+            out.push("arxiv".to_string());
+        }
+        if self.pubmed.enabled {
+            out.push("pubmed".to_string());
+        }
         if self.xrxiv.enabled {
             out.push("biorxiv".to_string());
             out.push("medrxiv".to_string());
@@ -144,6 +152,8 @@ pub struct SearchSemanticScholarSection {
     pub enabled: bool,
     #[serde(default = "default_ss_limit")]
     pub max_results: usize,
+    #[serde(default)]
+    pub api_key: String,
     #[serde(default = "default_source_timeout_sec")]
     pub timeout_sec: u64,
 }
@@ -260,10 +270,6 @@ fn default_ranking_key_stale_ttl_sec() -> u64 {
     180
 }
 
-fn default_enabled_sources() -> Vec<String> {
-    vec!["openalex".to_string(), "semanticscholar".to_string()]
-}
-
 /// When a [search.xxx] section IS present in TOML, `enabled` defaults to true.
 fn default_source_enabled() -> bool {
     true
@@ -306,7 +312,7 @@ fn default_pubmed_page_size() -> usize {
 }
 
 fn default_pubmed_tool() -> String {
-    "Rscholar".to_string()
+    "ScholarLens".to_string()
 }
 
 fn default_pubmed_email() -> String {
@@ -341,7 +347,7 @@ impl Default for SearchOpenAlexSection {
     fn default() -> Self {
         Self {
             enabled: false,
-            max_results: default_oa_limit(),
+            max_results: 0,
             timeout_sec: default_source_timeout_sec(),
         }
     }
@@ -351,7 +357,8 @@ impl Default for SearchSemanticScholarSection {
     fn default() -> Self {
         Self {
             enabled: false,
-            max_results: default_ss_limit(),
+            max_results: 0,
+            api_key: String::new(),
             timeout_sec: default_source_timeout_sec(),
         }
     }
@@ -502,7 +509,7 @@ impl ServerConfig {
     /// Load configuration from `config.toml`
     pub fn load_from_file(path: &str) -> Result<Self> {
         let path = Path::new(path);
-        
+
         if !path.exists() {
             warn!("Config file {} not found, using defaults", path.display());
             return Ok(Self::default());
@@ -602,6 +609,7 @@ mod tests {
 
             [search.semanticscholar]
             max_results = 50
+            api_key = "ss-key"
             timeout_sec = 20
 
             [search.arxiv]
@@ -616,7 +624,7 @@ mod tests {
             max_results = 200
             page_size = 100
             api_key = "pm-key"
-            tool = "RscholarTest"
+            tool = "ScholarLensTest"
             email = "x@example.com"
             timeout_sec = 20
             delay_no_key_ms = 350
@@ -636,7 +644,7 @@ mod tests {
         write!(file, "{}", toml).unwrap();
 
         let config = ServerConfig::load_from_file(file.path().to_str().unwrap()).unwrap();
-        
+
         assert_eq!(config.server.port, 8080);
         assert!(config.server.admin_enabled);
         assert_eq!(config.easyscholar.keys.len(), 2);
@@ -654,7 +662,11 @@ mod tests {
         assert_eq!(config.ranking.key_stale_ttl_sec, 120);
         assert!(config.llm.enable_filter);
         assert_eq!(
-            config.llm.provider_configs.get("aiping").map(|v| v.api_key.clone()),
+            config
+                .llm
+                .provider_configs
+                .get("aiping")
+                .map(|v| v.api_key.clone()),
             Some("abc".to_string())
         );
         assert_eq!(config.llm.providers, vec!["bigmodel", "siliconflow"]);
@@ -675,6 +687,7 @@ mod tests {
         assert!(config.search.xrxiv.enabled);
         assert_eq!(config.search.openalex.max_results, 50);
         assert_eq!(config.search.semanticscholar.max_results, 50);
+        assert_eq!(config.search.semanticscholar.api_key, "ss-key");
         // effective_sources should derive from flags (enabled_sources is empty)
         let effective = config.search.effective_sources();
         assert!(effective.contains(&"openalex".to_string()));
@@ -686,10 +699,38 @@ mod tests {
         assert_eq!(config.search.arxiv.max_results, 200);
         assert_eq!(config.search.arxiv.page_size, 100);
         assert_eq!(config.search.pubmed.api_key, "pm-key");
-        assert_eq!(config.search.pubmed.tool, "RscholarTest");
+        assert_eq!(config.search.pubmed.tool, "ScholarLensTest");
         assert_eq!(config.search.xrxiv.biorxiv_max_results, 180);
         assert_eq!(config.search.xrxiv.medrxiv_max_results, 170);
         assert_eq!(config.search.xrxiv.max_retries, 5);
+    }
+
+    #[test]
+    fn test_absent_source_sections_keep_legacy_limits_as_fallback() {
+        let toml = r#"
+            [server]
+            host = "127.0.0.1"
+            port = 8080
+
+            [easyscholar]
+            keys = []
+
+            [llm]
+            default_provider = ""
+            enable_filter = false
+
+            [search]
+            default_ylo = 2023
+            enable_crossref = false
+            enabled_sources = ["openalex", "semanticscholar"]
+            ss_limit = 12
+            oa_limit = 34
+        "#;
+
+        let config: ServerConfig = toml::from_str(toml).unwrap();
+
+        assert_eq!(config.search.semanticscholar.max_results, 0);
+        assert_eq!(config.search.openalex.max_results, 0);
     }
 
     #[test]

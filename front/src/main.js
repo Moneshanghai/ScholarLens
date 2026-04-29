@@ -1,9 +1,9 @@
 /**
- * RustScholar Frontend - Main Application with Client-Side Routing
+ * ScholarLens Frontend - Main Application with Client-Side Routing
  * Multi-page SPA with history sidebar
  */
 
-import { createTask, pollTaskStatus, downloadCSV, downloadBibTeX, getTaskStatus } from './api/client.js';
+import { fetchTaskHistory } from './api/client.js';
 import { HomePage } from './pages/home.js';
 import { ApiPage } from './pages/api.js';
 import { TaskPage } from './pages/task.js';
@@ -11,6 +11,7 @@ import { historyManager } from './utils/history.js';
 
 // Router state
 let currentPage = null;
+let historyRefreshInFlight = null;
 
 /**
  * Simple client-side router
@@ -69,6 +70,7 @@ function initSidebar() {
         }
         sidebar.classList.toggle('open', show);
         overlay.classList.toggle('active', show);
+        if (show) refreshHistoryFromServer();
     };
 
     // Close events
@@ -83,6 +85,25 @@ function initSidebar() {
 
     // Render history
     renderHistoryList();
+    refreshHistoryFromServer();
+}
+
+export async function refreshHistoryFromServer() {
+    if (historyRefreshInFlight) return historyRefreshInFlight;
+
+    historyRefreshInFlight = fetchTaskHistory({ limit: 50 })
+        .then((data) => {
+            historyManager.mergeServerHistory(data.items || []);
+            renderHistoryList();
+        })
+        .catch((error) => {
+            console.warn('Failed to refresh server history:', error.message);
+        })
+        .finally(() => {
+            historyRefreshInFlight = null;
+        });
+
+    return historyRefreshInFlight;
 }
 
 /**
@@ -121,6 +142,7 @@ export function renderHistoryList() {
 
 function getStatusText(status) {
     const statusMap = {
+        'pending': '等待中',
         'queued': '等待中',
         'running': '运行中',
         'completed': '已完成',

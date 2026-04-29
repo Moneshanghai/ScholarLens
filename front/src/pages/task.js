@@ -5,13 +5,22 @@
 import { getTaskStatus, downloadCSV, downloadBibTeX } from '../api/client.js';
 import { router, escapeHtml } from '../main.js';
 import { historyManager } from '../utils/history.js';
+import { getPdfUrl } from '../utils/pdf-sort.js';
+import {
+  defaultSortDirection,
+  getAuthorsString,
+  getImpactFactorValue,
+  getJournalName,
+  getRelevanceScoreValue,
+  sortPapers as sortPaperRows,
+} from '../utils/paper-sort.js';
 
 export class TaskPage {
   constructor(taskId) {
     this.taskId = taskId;
     this.taskData = null;
     this.currentPapers = [];
-    this.currentSortColumn = 'if_score';
+    this.currentSortColumn = 'relevance_score';
     this.currentSortDirection = 'desc';
     this.pollInterval = null;
   }
@@ -22,14 +31,11 @@ export class TaskPage {
       <header class="header">
         <div class="container header-container">
           <button id="history-toggle" class="btn-history" aria-label="查询历史">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
+            <i class="bi bi-clock-history"></i>
             <span>历史记录</span>
           </button>
-          <a href="/" class="header-logo">RustScholar</a>
-          <a href="/docs" class="header-link">API 文档</a>
+          <a href="/" class="header-logo">ScholarLens</a>
+          <a href="/docs" class="header-link"><i class="bi bi-file-earmark-text"></i> API 文档</a>
         </div>
       </header>
 
@@ -39,10 +45,7 @@ export class TaskPage {
           <div class="task-detail-card">
             <div class="task-detail-header">
               <a href="/" class="back-link">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="19" y1="12" x2="5" y2="12"></line>
-                  <polyline points="12 19 5 12 12 5"></polyline>
-                </svg>
+                <i class="bi bi-arrow-left"></i>
                 返回搜索
               </a>
               <h1 class="task-detail-title">任务详情</h1>
@@ -55,18 +58,14 @@ export class TaskPage {
             
             <!-- Loading State -->
             <div id="task-loading" class="task-loading">
-              <div class="spinner-large"></div>
+              <div class="spinner-border text-primary spinner-large" aria-hidden="true"></div>
               <p>正在加载任务信息...</p>
             </div>
             
             <!-- Error State -->
             <div id="task-error" class="task-error hidden">
               <div class="error-icon">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <line x1="12" y1="8" x2="12" y2="12"></line>
-                  <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                </svg>
+                <i class="bi bi-exclamation-triangle"></i>
               </div>
               <p id="task-error-message">任务不存在或已过期</p>
               <button id="retry-fetch" class="btn btn-primary">重试</button>
@@ -98,7 +97,7 @@ export class TaskPage {
               <!-- Results Section (shown when completed) -->
               <div id="task-results" class="task-results hidden">
                 <div class="results-header">
-                  <h2 class="section-title">搜索结果</h2>
+                  <h2 class="section-title"><i class="bi bi-table"></i> 搜索结果</h2>
                   <div class="results-stats">
                     <div class="stat-item">
                       <span class="stat-value" id="total-papers">0</span>
@@ -114,18 +113,11 @@ export class TaskPage {
                 
                 <div class="download-buttons">
                   <button id="download-csv" class="btn btn-secondary">
-                    <svg class="btn-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                      <polyline points="7 10 12 15 17 10"></polyline>
-                      <line x1="12" y1="15" x2="12" y2="3"></line>
-                    </svg>
+                    <i class="bi bi-download btn-icon"></i>
                     <span>下载 CSV</span>
                   </button>
                   <button id="download-bibtex" class="btn btn-outline">
-                    <svg class="btn-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                      <polyline points="14 2 14 8 20 8"></polyline>
-                    </svg>
+                    <i class="bi bi-file-earmark-text btn-icon"></i>
                     <span>导出 BibTeX</span>
                   </button>
                 </div>
@@ -234,6 +226,7 @@ export class TaskPage {
     indicator.classList.remove('status-queued', 'status-running', 'status-completed', 'status-failed');
 
     const statusMap = {
+      'pending': ['status-queued', '等待中'],
       'queued': ['status-queued', '等待中'],
       'running': ['status-running', '运行中'],
       'completed': ['status-completed', '已完成'],
@@ -291,11 +284,7 @@ export class TaskPage {
         const label = this.getSourceLabel(source);
         if (hasError) {
           items.push(`<span class="source-stat source-stat-error" title="${escapeHtml(sourceErrors[source])}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-              <line x1="12" y1="9" x2="12" y2="13"></line>
-              <line x1="12" y1="17" x2="12.01" y2="17"></line>
-            </svg>
+            <i class="bi bi-exclamation-triangle"></i>
             ${label}: ${count}
           </span>`);
         } else {
@@ -310,11 +299,7 @@ export class TaskPage {
         if (sourceCounts && sourceCounts[source] !== undefined) continue;
         const label = this.getSourceLabel(source);
         items.push(`<span class="source-stat source-stat-error" title="${escapeHtml(err)}">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-            <line x1="12" y1="9" x2="12" y2="13"></line>
-            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-          </svg>
+          <i class="bi bi-exclamation-triangle"></i>
           ${label}: 失败
         </span>`);
       }
@@ -341,34 +326,7 @@ export class TaskPage {
   }
 
   sortPapers() {
-    this.currentPapers.sort((a, b) => {
-      let valA, valB;
-
-      switch (this.currentSortColumn) {
-        case 'title':
-          valA = (a.title || '').toLowerCase();
-          valB = (b.title || '').toLowerCase();
-          break;
-        case 'authors':
-          valA = this.getAuthorsString(a.authors).toLowerCase();
-          valB = this.getAuthorsString(b.authors).toLowerCase();
-          break;
-        case 'journal':
-          valA = (a.journal || a.venue || '').toLowerCase();
-          valB = (b.journal || b.venue || '').toLowerCase();
-          break;
-        case 'if_score':
-          valA = parseFloat(a.if_score) || 0;
-          valB = parseFloat(b.if_score) || 0;
-          break;
-        default:
-          return 0;
-      }
-
-      if (valA < valB) return this.currentSortDirection === 'asc' ? -1 : 1;
-      if (valA > valB) return this.currentSortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
+    sortPaperRows(this.currentPapers, this.currentSortColumn, this.currentSortDirection);
   }
 
   handleSort(column) {
@@ -376,7 +334,7 @@ export class TaskPage {
       this.currentSortDirection = this.currentSortDirection === 'asc' ? 'desc' : 'asc';
     } else {
       this.currentSortColumn = column;
-      this.currentSortDirection = column === 'if_score' ? 'desc' : 'asc';
+      this.currentSortDirection = defaultSortDirection(column);
     }
 
     this.sortPapers();
@@ -389,14 +347,11 @@ export class TaskPage {
   }
 
   getAuthorsString(authors) {
-    if (!authors) return '';
-    if (typeof authors === 'string') return authors;
-    if (Array.isArray(authors)) return authors.join(', ');
-    return String(authors);
+    return getAuthorsString(authors);
   }
 
   getJournalName(paper) {
-    return paper.journal || paper.venue || paper.publicationVenue || '';
+    return getJournalName(paper);
   }
 
   getImpactFactor(paper) {
@@ -408,8 +363,16 @@ export class TaskPage {
   }
 
   getImpactFactorValue(paper) {
-    const ifValue = paper.if_score || paper.sciif || paper.impactFactor || paper.if;
-    return parseFloat(ifValue) || 0;
+    return getImpactFactorValue(paper);
+  }
+
+  getRelevanceScore(paper) {
+    const score = this.getRelevanceScoreValue(paper);
+    return score > 0 ? `${score}` : '-';
+  }
+
+  getRelevanceScoreValue(paper) {
+    return getRelevanceScoreValue(paper);
   }
 
   getJournalColor(ifScore) {
@@ -466,14 +429,16 @@ export class TaskPage {
           <th class="sortable" data-column="authors">作者${this.getSortIndicator('authors')}</th>
           <th>年份</th>
           <th class="sortable" data-column="journal">期刊${this.getSortIndicator('journal')}</th>
+          <th class="sortable" data-column="relevance_score">相关性${this.getSortIndicator('relevance_score')}</th>
           <th class="sortable" data-column="if_score">IF${this.getSortIndicator('if_score')}</th>
-          <th>PDF</th>
+          <th class="sortable" data-column="has_pdf">PDF${this.getSortIndicator('has_pdf')}</th>
         </tr>
       </thead>
       <tbody>
         ${this.currentPapers.map(paper => {
       const ifScore = this.getImpactFactorValue(paper);
       const journalStyle = this.getJournalColor(ifScore);
+      const pdfUrl = getPdfUrl(paper);
       return `
           <tr>
             <td class="paper-title">
@@ -485,17 +450,12 @@ export class TaskPage {
             <td>${escapeHtml(this.truncateAuthors(paper.authors))}</td>
             <td>${paper.year || '-'}</td>
             <td><span class="journal-tag" style="${journalStyle}">${escapeHtml(this.getJournalName(paper)) || '-'}</span></td>
+            <td class="relevance-value" title="${escapeHtml(paper.relevance_reason || '')}">${this.getRelevanceScore(paper)}</td>
             <td class="if-value">${this.getImpactFactor(paper)}</td>
             <td class="pdf-cell">
-              ${paper.pdf_url
-          ? `<a href="${escapeHtml(paper.pdf_url)}" target="_blank" rel="noopener" class="pdf-link" title="下载 PDF">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                      <polyline points="14 2 14 8 20 8"></polyline>
-                      <line x1="16" y1="13" x2="8" y2="13"></line>
-                      <line x1="16" y1="17" x2="8" y2="17"></line>
-                      <polyline points="10 9 9 9 8 9"></polyline>
-                    </svg>
+              ${pdfUrl
+          ? `<a href="${escapeHtml(pdfUrl)}" target="_blank" rel="noopener" class="pdf-link" title="下载 PDF">
+                    <i class="bi bi-file-earmark-pdf"></i>
                   </a>`
           : '<span class="pdf-none">-</span>'
         }
