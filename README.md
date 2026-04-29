@@ -1,216 +1,256 @@
 # ScholarLens
-[English](./README.md) [中文](./README_zh.md)
 
-ScholarLens is a Rust-based academic literature search service with asynchronous task execution, multi-source retrieval, metadata enrichment, ranking filters, and CSV/BibTeX export.
+[English](./README.md) | [中文](./README_zh.md)
 
-This document reflects the current code in `src/`.
+ScholarLens is a Rust + Vite application for academic literature discovery. It searches multiple scholarly sources, enriches metadata, ranks journals, optionally uses LLMs for translation/expansion/relevance filtering, and exports results as CSV or BibTeX.
 
-## What It Does
+## Highlights
 
-- Searches papers from multiple sources:
-  - `openalex`
-  - `semanticscholar`
-  - `arxiv`
-  - `pubmed`
-  - `biorxiv`
-  - `medrxiv`
-- Runs as async task workflow (`POST /tasks` -> poll status -> download results)
-- Performs optional enrichment:
-  - Crossref DOI/abstract enrichment for papers missing DOI
-  - Semantic Scholar batch lookup for abstracts/PDF URLs by DOI
-- Applies ranking lookup via EasyScholar pool service (with SQLite cache)
-- Applies ranking filters (`sciif`, `jci`, `sci`)
-  - Preprint venues are not filtered out by ranking criteria
-- Applies optional LLM relevance filtering when `content_help` is provided
-- Scores and sorts final results by relevance by default (`sort_by = "relevance"`)
-- Exports:
-  - Task JSON result
-  - `results.csv`
-  - BibTeX from task result (`/tasks/{id}/bibtex`)
+- Multi-source literature search: OpenAlex, Semantic Scholar, arXiv, PubMed, bioRxiv, and medRxiv.
+- Chinese-friendly search: Chinese/CJK keywords are translated and expanded into English queries while keeping the original keyword as fallback.
+- Web-configurable LLM providers: manage OpenAI-compatible providers from `/settings` without restarting the server.
+- Supports both OpenAI-compatible `/v1/chat/completions` and `/v1/responses` interfaces.
+- Async task workflow: submit a search task, poll progress, then download structured results.
+- Journal ranking filters powered by EasyScholar, with SQLite caching and key-pool scheduling.
+- Metadata enrichment through Crossref and Semantic Scholar DOI lookups.
+- Result sorting by relevance, impact factor, or PDF availability.
+- Export formats: task JSON, `results.csv`, and BibTeX.
 
-## Usage
+## Architecture At A Glance
 
-### 1. Configuration
-Copy the example configuration and edit it to add your API keys:
+```text
+Browser / Vite UI
+        |
+        v
+Rust Axum API  ---- SQLite: tasks, admin keys, cache, analytics, LLM providers
+        |
+        +-- Search sources: OpenAlex / Semantic Scholar / arXiv / PubMed / xRxiv
+        +-- Enrichment: Crossref / Semantic Scholar DOI batch lookup
+        +-- Ranking: EasyScholar key pool + cache
+        +-- LLM runtime: keyword translation, keyword expansion, relevance filtering
+```
+
+## Quick Start
+
+### 1. Prepare configuration
 
 ```bash
 cp config.example.toml config.toml
-nano config.toml
 ```
 
-**Required settings:**
-- `[easyscholar]`: Add at least one valid EasyScholar key.
-- `[llm]`: Add your LLM provider API key (e.g., SiliconFlow, AIPing, or BigModel).
+Edit `config.toml`:
 
-**Note:** All search sources (OpenAlex, arXiv, PubMed, etc.) are enabled by default.
+- Add at least one `[easyscholar].keys` value if you want journal ranking and ranking filters.
+- Set `[server].admin_enabled = true` if you want to use the web settings page for LLM providers.
+- Keep private keys out of git. `config.toml`, `data/`, `target/`, and frontend build output are ignored.
 
-### 2. Startup
-Run the start script to build and launch the service:
+### 2. Start the app
 
-**Linux/macOS:**
-```bash
-./start.sh
-```
+Windows PowerShell:
 
-**Windows PowerShell:**
 ```powershell
 .\start.ps1
 ```
 
-The script automatically:
-- Installs frontend dependencies & builds the frontend
-- Builds the Rust backend in release mode
-- Starts the server at `http://localhost:3000`
+Linux/macOS:
 
-## New/Important Current Behavior
-
-
-- Keyword translation stage is built in:
-  - If the input keyword is non-English, pipeline attempts LLM translation first
-  - Downstream search and keyword expansion use the translated English keyword
-  - On translation failure, pipeline falls back to original keyword
-- Keyword expansion is based on the translated English keyword
-- Source validation is strict:
-  - Unknown source names in `source_include` return validation error
-- Request-level `enable_llm_filter` was removed
-  - Whether LLM filtering runs is decided by pipeline conditions (`content_help` + provider availability)
-- Default output ordering is relevance-first; use `sort_by = "impact_factor"` to keep IF-first ordering.
-- Output directory naming format is:
-  - `output/{timestamp}_{keyword}`
-
-## Runtime Modes
-
-- HTTP server mode (primary):
-  - `ScholarLens server --port 3000 --serve-static front/dist`
-- CLI search mode (legacy/auxiliary):
-  - `ScholarLens search ...`
-
-
-## API Overview
-
-Public endpoints:
-
-- `GET /health`
-- `POST /tasks`
-- `GET /tasks/{id}`
-- `GET /tasks/{id}/download`
-- `GET /tasks/{id}/bibtex`
-
-Admin endpoints:
-
-- Prefix: `/api/v1/admin/*`
-- Auth: `X-API-Key` header (must be admin key)
-- Includes key management, cache management, analytics, system status
-
-See `docs/API.md` for full request/response details.
-
-## Search Request Fields (`POST /tasks`)
-
-Supported request JSON fields:
-
-- `keyword` (required)
-- `ylo`
-- `enable_crossref`
-- `sciif`
-- `jci`
-- `sci`
-- `llm_strict_filter`
-- `content_help`
-- `sort_by` (`relevance` by default, or `impact_factor`)
-- `source_include`
-- `source_exclude`
-
-Notes:
-
-- Ranking filters require configured `easyscholar.keys`
-- `source_include`/`source_exclude` are case-insensitive
-- Supported source values:
-  - `openalex`, `semanticscholar`, `arxiv`, `pubmed`, `biorxiv`, `medrxiv`
-
-## Pipeline Stages (Server Task)
-
-1. Keyword translation (LLM, if needed)
-2. Keyword expansion (LLM, based on translated keyword)
-3. Parallel source search
-4. Merge + dedup
-5. Crossref enrichment (missing DOI only)
-6. Semantic Scholar DOI batch enrichment
-7. Ranking lookup and assignment
-8. Ranking filter (`sciif`/`jci`/`sci`, preprints exempt)
-9. LLM relevance filter (only when `content_help` is non-empty)
-10. Relevance scoring and final sorting
-11. Fallback handling (strict vs non-strict)
-12. CSV save + analytics logging + task completion
-
-## Project Layout
-
-```text
-src/
-  cli/                     CLI commands (`search`, `server`, `init-admin`)
-  db/                      SQLite schema + CRUD (tasks, keys, cache, analytics)
-  llm/                     LLM providers, keyword expansion, keyword translation
-  ranking/                 EasyScholar client pool + ranking service scheduler
-  server/                  HTTP API (routes, handlers, pipeline, middleware, admin)
-  sources/                 openalex / semanticscholar / arxiv / pubmed / xrxiv / crossref
-  error.rs                 unified error type
-  traffic.rs               traffic accounting helpers
-  unified.rs               unified output structs (CLI path)
-front/                     Vite frontend
-docs/                      API and architecture docs
-tests/                     integration and live tests
+```bash
+./start.sh
 ```
 
-## Configuration
+The startup script installs/builds the frontend, builds the Rust backend, and serves the app at:
 
-Main file: `config.toml`
+```text
+http://localhost:3000
+```
 
-Key sections:
+## LLM Provider Setup
 
-- `[server]` host/port
-- `[easyscholar]` API keys for ranking
-- `[ranking]` scheduler/lease/key-health settings
-- `[llm]` provider settings and fallback order
-- `[search]` default ylo, source limits, enabled sources
-- `[search.arxiv]`, `[search.pubmed]`, `[search.xrxiv]` source-specific settings
+LLMs are optional, but recommended for Chinese search and semantic filtering.
 
-## Admin Key Bootstrap
+### Web setup
 
-Initialize first admin key:
+1. Enable admin routes in `config.toml`:
+
+```toml
+[server]
+admin_enabled = true
+```
+
+2. Create the first admin key:
 
 ```bash
 cargo run -- init-admin --name Admin
 ```
 
-Use returned key in header for admin routes:
+3. Start the server and open:
 
 ```text
-X-API-Key: <your-admin-key>
+http://localhost:3000/settings
 ```
 
-## Output and Persistence
+4. Paste the admin key, add a provider, and click **Save and Test Connection**.
 
-- Task results are persisted in SQLite (`data/rscholar.db`)
-- CSV output path per task:
-  - `output/{timestamp}_{sanitized_keyword}/results.csv`
-- Task memory cache is cleaned periodically (completed/failed tasks TTL)
-- After restart:
-  - task status can still be queried from DB
-  - interrupted running tasks are recovered as failed
+Provider fields:
+
+| Field | Description |
+|---|---|
+| `name` | Stable provider name, for example `openai-compatible` or `modelverse` |
+| `enabled` | Whether the runtime can use this provider |
+| `interface_type` | `chat_completions` or `responses` |
+| `endpoint` | Full endpoint or base URL. Base URLs are normalized automatically. |
+| `model` | Model name sent to the provider |
+| `api_key` | Provider API key. Omit it when editing to keep the existing key. |
+| `order` | Lower values are tried earlier |
+
+Endpoint normalization examples:
+
+| Interface | Input endpoint | Request endpoint |
+|---|---|---|
+| `chat_completions` | `https://api.example.com` | `https://api.example.com/v1/chat/completions` |
+| `responses` | `https://api.example.com/v1` | `https://api.example.com/v1/responses` |
+
+### Config-file setup
+
+`config.toml` can still define startup defaults under `[llm]` and `[llm.registry.<name>]`. Providers saved in SQLite from the web UI take priority and are reloaded immediately after changes.
+
+## Chinese Search Behavior
+
+ScholarLens treats CJK queries differently from plain English queries:
+
+1. Keep the original Chinese keyword.
+2. Use the configured LLM runtime to translate it into an English academic query when available.
+3. Generate related English expansion terms.
+4. Search English-friendly sources with the translated/expanded terms.
+5. Run low-cost fallback/supplemental searches with the original keyword where useful.
+6. Merge and deduplicate results by DOI/title.
+7. Use CJK-aware local tokenization for relevance scoring, so Chinese `content_help` is not treated as one long token.
+
+This means a query such as `机器学习 岩石强度预测` can retrieve English papers even when a source performs poorly on Chinese keywords.
+
+## LLM Usage In The Pipeline
+
+LLMs are used for three independent jobs:
+
+- **Keyword translation**: improves non-English search recall.
+- **Keyword expansion**: adds related academic terms for broader coverage.
+- **Relevance filtering**: when `content_help` is provided and providers are available, the LLM evaluates whether each paper matches the user's research intent.
+
+LLM translation/expansion can run even if strict LLM relevance filtering is disabled.
+
+## HTTP API Overview
+
+Public endpoints:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Health check |
+| `POST` | `/tasks` | Create an async literature search task |
+| `GET` | `/tasks` | List recent tasks |
+| `GET` | `/tasks/{id}` | Read task status/result |
+| `GET` | `/tasks/{id}/download` | Download CSV |
+| `GET` | `/tasks/{id}/bibtex` | Download BibTeX |
+| `GET` | `/sources` | List enabled search sources |
+
+Admin endpoints use the `/api/v1/admin/*` prefix and require `X-API-Key` with an admin key. They include API key management, cache management, analytics, system status, and LLM provider management.
+
+See [`docs/API.md`](./docs/API.md) for detailed request and response schemas.
+
+## Search Request Example
+
+```json
+{
+  "keyword": "机器学习 岩石强度预测",
+  "ylo": 2021,
+  "enable_crossref": true,
+  "sciif": 3.0,
+  "content_help": "只关注使用机器学习预测岩石单轴抗压强度的论文",
+  "source_include": ["openalex", "semanticscholar", "arxiv", "pubmed"],
+  "sort_by": "relevance"
+}
+```
+
+Supported `source_include` / `source_exclude` values:
+
+- `openalex`
+- `semanticscholar`
+- `arxiv`
+- `pubmed`
+- `biorxiv`
+- `medrxiv`
+
+## Pipeline Stages
+
+1. Validate request and source selections.
+2. Build a search query plan, including Chinese/CJK translation and expansion when applicable.
+3. Search enabled sources in parallel.
+4. Merge and deduplicate papers.
+5. Enrich missing metadata through Crossref and Semantic Scholar.
+6. Query EasyScholar rankings and apply ranking filters.
+7. Optionally run LLM relevance filtering.
+8. Score and sort final results.
+9. Persist task data, save CSV, and expose download endpoints.
+
+## Project Layout
+
+```text
+src/
+  cli/                     CLI commands: search, server, init-admin
+  db/                      SQLite schema and CRUD modules
+  llm/                     LLM runtime, providers, translation, expansion
+  ranking/                 EasyScholar client pool and ranking scheduler
+  server/                  Axum routes, handlers, pipeline, admin APIs
+  sources/                 Search and enrichment clients
+front/                     Vite frontend
+front/src/pages/settings.js Web LLM provider settings page
+docs/                      API and architecture docs
+tests/                     Unit, integration, and live tests
+```
+
+## Development
+
+Frontend:
+
+```bash
+cd front
+npm install
+npm run build
+```
+
+Rust tests:
+
+```bash
+cargo test
+```
+
+Targeted LLM and Chinese-search tests:
+
+```bash
+cargo test --test llm_provider_and_zh_search
+```
+
+Clippy, if installed:
+
+```bash
+cargo clippy --all-targets -- -D warnings
+```
+
+## Persistence And Output
+
+- SQLite database: `data/rscholar.db`
+- CSV results: `output/{timestamp}_{sanitized_keyword}/results.csv`
+- Task status and completed results survive server restarts.
+- Interrupted running tasks are recovered as failed tasks after restart.
 
 ## Security Notes
 
-- Admin API uses API key auth in middleware (`X-API-Key`)
-- API keys are stored as HMAC-SHA256 hashes with server pepper
-- Keep production keys out of version-controlled `config.toml`
-- Prefer environment/secret management for API keys
-
-## Development Notes
-
-- Frontend build may require elevated process permissions in restricted environments
-- Some integration/live tests are network dependent and may be slow on Windows
+- Admin routes require `X-API-Key` and admin privileges.
+- Admin API keys are stored as HMAC-SHA256 hashes.
+- LLM provider API keys are stored locally in SQLite and masked in list responses.
+- Do not commit `config.toml`, local databases, or real API keys.
 
 ## Related Docs
 
-- `docs/API.md`
-- `docs/ARCHITECTURE.md`
-- `docs/API_zh.md` (if maintained)
+- [`docs/API.md`](./docs/API.md)
+- [`docs/API_zh.md`](./docs/API_zh.md)
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
