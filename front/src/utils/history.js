@@ -4,12 +4,14 @@
 
 const STORAGE_KEY = 'rustscholar_history';
 const HIDDEN_SERVER_KEY = 'rustscholar_hidden_server_history';
+const SERVER_CLEAR_BEFORE_KEY = 'rustscholar_server_history_cleared_before';
 const MAX_HISTORY_ITEMS = 50;
 
 export class HistoryManager {
     constructor() {
         this.history = this.loadHistory();
         this.hiddenServerTaskIds = this.loadHiddenServerTaskIds();
+        this.serverHistoryClearedBefore = this.loadServerHistoryClearedBefore();
     }
 
     loadHistory() {
@@ -46,6 +48,31 @@ export class HistoryManager {
             localStorage.setItem(HIDDEN_SERVER_KEY, JSON.stringify([...this.hiddenServerTaskIds]));
         } catch (e) {
             console.error('Failed to save hidden server history:', e);
+        }
+    }
+
+    loadServerHistoryClearedBefore() {
+        try {
+            const value = Number(localStorage.getItem(SERVER_CLEAR_BEFORE_KEY));
+            return Number.isFinite(value) && value > 0 ? value : 0;
+        } catch (e) {
+            console.error('Failed to load server history clear timestamp:', e);
+            return 0;
+        }
+    }
+
+    saveServerHistoryClearedBefore() {
+        try {
+            if (this.serverHistoryClearedBefore > 0) {
+                localStorage.setItem(
+                    SERVER_CLEAR_BEFORE_KEY,
+                    String(this.serverHistoryClearedBefore)
+                );
+            } else {
+                localStorage.removeItem(SERVER_CLEAR_BEFORE_KEY);
+            }
+        } catch (e) {
+            console.error('Failed to save server history clear timestamp:', e);
         }
     }
 
@@ -100,7 +127,7 @@ export class HistoryManager {
         for (const task of tasks) {
             const normalized = this.normalizeServerTask(task);
             if (!normalized) continue;
-            if (this.hiddenServerTaskIds.has(normalized.taskId)) continue;
+            if (this.shouldHideServerTask(normalized)) continue;
 
             const existing = byId.get(normalized.taskId);
             byId.set(normalized.taskId, existing ? { ...existing, ...normalized } : normalized);
@@ -127,6 +154,15 @@ export class HistoryManager {
         };
     }
 
+    shouldHideServerTask(task) {
+        if (this.hiddenServerTaskIds.has(task.taskId)) return true;
+        return (
+            this.serverHistoryClearedBefore > 0 &&
+            task.source === 'server' &&
+            (task.createdAt || 0) <= this.serverHistoryClearedBefore
+        );
+    }
+
     normalizeTimestamp(value) {
         const timestamp = Number(value);
         if (!Number.isFinite(timestamp) || timestamp <= 0) return Date.now();
@@ -137,8 +173,10 @@ export class HistoryManager {
         this.history.forEach((item) => {
             if (item.taskId) this.hiddenServerTaskIds.add(item.taskId);
         });
+        this.serverHistoryClearedBefore = Date.now();
         this.history = [];
         this.saveHiddenServerTaskIds();
+        this.saveServerHistoryClearedBefore();
         this.saveHistory();
     }
 

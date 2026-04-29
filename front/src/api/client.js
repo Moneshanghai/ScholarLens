@@ -195,6 +195,18 @@ export async function testLlmProvider(adminKey, name) {
     return parseAdminResponse(response, 'Failed to test LLM provider');
 }
 
+export async function changeAdminKey(adminKey, currentKey, newKey) {
+    const response = await fetch(`${API_BASE}/api/v1/admin/admin-key`, {
+        method: 'PATCH',
+        headers: adminHeaders(adminKey),
+        body: JSON.stringify({
+            current_key: currentKey,
+            new_key: newKey,
+        }),
+    });
+    return parseAdminResponse(response, 'Failed to change Admin API Key');
+}
+
 /**
  * Poll task status until completion
  * @param {string} taskId - Task ID

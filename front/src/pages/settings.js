@@ -3,6 +3,7 @@
  */
 
 import {
+  changeAdminKey as updateAdminKey,
   deleteLlmProvider,
   listLlmProviders,
   saveLlmProvider,
@@ -51,6 +52,17 @@ export class SettingsPage {
                 <input id="admin-key" class="form-input" type="password" value="${escapeHtml(this.adminKey)}" placeholder="粘贴 init-admin 输出的管理员 key">
                 <p class="form-hint">只保存在当前浏览器 localStorage，不会提交到代码仓库。</p>
                 <button id="load-providers" class="btn btn-primary">加载当前配置</button>
+                <div class="admin-key-change">
+                  <h3>修改为自定义 Admin API Key</h3>
+                  <p class="form-hint">先粘贴当前 key，再输入两次新 key。成功后浏览器会自动保存新 key，旧 key 立即失效。</p>
+                  <form id="admin-key-form" class="settings-form">
+                    <label class="form-label" for="new-admin-key">新 Admin API Key</label>
+                    <input id="new-admin-key" name="new_admin_key" class="form-input" type="password" autocomplete="new-password" placeholder="至少 8 位，不含空格">
+                    <label class="form-label" for="new-admin-key-confirm">再次输入新 Admin API Key</label>
+                    <input id="new-admin-key-confirm" name="new_admin_key_confirm" class="form-input" type="password" autocomplete="new-password" placeholder="再输入一次以确认">
+                    <button class="btn btn-secondary" type="submit">保存自定义 Key</button>
+                  </form>
+                </div>
               </div>
 
               <div class="api-block">
@@ -123,6 +135,7 @@ export class SettingsPage {
       localStorage.setItem(STORAGE_KEY, this.adminKey);
     });
     document.getElementById('load-providers')?.addEventListener('click', () => this.loadProviders());
+    document.getElementById('admin-key-form')?.addEventListener('submit', (event) => this.changeAdminKey(event));
     document.getElementById('provider-form')?.addEventListener('submit', (event) => this.saveProvider(event));
     document.getElementById('cancel-provider-edit')?.addEventListener('click', () => this.resetProviderForm());
 
@@ -137,6 +150,43 @@ export class SettingsPage {
       this.providers = data.providers || [];
       this.renderProviderList();
       this.setMessage(`已加载 ${this.providers.length} 个服务商。`);
+    } catch (error) {
+      this.setMessage(error.message, true);
+    }
+  }
+
+  async changeAdminKey(event) {
+    event.preventDefault();
+    if (!this.requireKey()) return;
+
+    const formData = new FormData(event.target);
+    const newKey = String(formData.get('new_admin_key') || '').trim();
+    const confirmKey = String(formData.get('new_admin_key_confirm') || '').trim();
+
+    if (newKey.length < 8) {
+      this.setMessage('新 Admin API Key 至少需要 8 位。', true);
+      return;
+    }
+    if (/\s/.test(newKey)) {
+      this.setMessage('新 Admin API Key 不能包含空格或换行。', true);
+      return;
+    }
+    if (newKey !== confirmKey) {
+      this.setMessage('两次输入的新 Admin API Key 不一致。', true);
+      return;
+    }
+    if (!window.confirm('确认保存新的 Admin API Key？保存后旧 key 会立即失效。')) {
+      return;
+    }
+
+    try {
+      await updateAdminKey(this.adminKey, this.adminKey, newKey);
+      this.adminKey = newKey;
+      localStorage.setItem(STORAGE_KEY, newKey);
+      const adminKeyInput = document.getElementById('admin-key');
+      if (adminKeyInput) adminKeyInput.value = newKey;
+      event.target.reset();
+      this.setMessage('Admin API Key 已更新，旧 key 已失效。');
     } catch (error) {
       this.setMessage(error.message, true);
     }

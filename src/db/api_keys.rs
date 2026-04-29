@@ -140,6 +140,51 @@ pub fn create(
     })
 }
 
+fn validate_custom_key(value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.len() < 8 {
+        return Err(GscholarError::Validation(
+            "New Admin API Key must be at least 8 characters.".to_string(),
+        ));
+    }
+    if trimmed.len() > 128 {
+        return Err(GscholarError::Validation(
+            "New Admin API Key must be 128 characters or fewer.".to_string(),
+        ));
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(GscholarError::Validation(
+            "New Admin API Key cannot contain whitespace or control characters.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Replace the current administrator key with a caller-provided custom key.
+///
+/// Returns `Ok(None)` when the current key is invalid or not an admin key.
+pub fn replace_key(conn: &Connection, current_key: &str, new_key: &str) -> Result<Option<ApiKey>> {
+    let current = match validate(conn, current_key)? {
+        Some(key) if key.is_admin => key,
+        _ => return Ok(None),
+    };
+
+    let normalized_new_key = new_key.trim();
+    validate_custom_key(normalized_new_key)?;
+    let new_hash = hash_key(normalized_new_key);
+
+    conn.execute(
+        "UPDATE api_keys SET key_hash = ?1, request_count = 0, last_used_at = NULL WHERE id = ?2",
+        params![new_hash, current.id],
+    )
+    .map_err(|e| GscholarError::Database(format!("Replace key failed: {}", e)))?;
+
+    get_by_id(conn, &current.id)
+}
+
 /// Validate an API key and return key info if valid
 ///
 /// Uses constant-time comparison to prevent timing attacks.
@@ -325,6 +370,45 @@ mod tests {
         let key = validated.expect("key");
         assert_eq!(key.name, "Test Key");
         assert!(!key.is_admin);
+    }
+
+    #[test]
+    fn test_replace_admin_key_with_custom_value() {
+        let conn = setup_db();
+        let created = create(&conn, "Admin", true, 10).expect("create admin");
+        let old_key = created.key.expose_secret().to_string();
+        let new_key = "my-custom-admin-key-2026";
+
+        let replaced = replace_key(&conn, &old_key, new_key)
+            .expect("replace")
+            .expect("admin key should be replaced");
+
+        assert_eq!(replaced.id, created.id);
+        assert!(validate(&conn, &old_key).expect("validate old").is_none());
+
+        let validated = validate(&conn, new_key)
+            .expect("validate new")
+            .expect("new key should validate");
+        assert_eq!(validated.id, created.id);
+        assert!(validated.is_admin);
+    }
+
+    #[test]
+    fn test_replace_key_requires_admin() {
+        let conn = setup_db();
+        let created = create(&conn, "User", false, 10).expect("create user");
+
+        let replaced = replace_key(
+            &conn,
+            created.key.expose_secret(),
+            "user-should-not-replace-key",
+        )
+        .expect("replace attempt");
+
+        assert!(replaced.is_none());
+        assert!(validate(&conn, created.key.expose_secret())
+            .expect("validate old")
+            .is_some());
     }
 
     #[test]

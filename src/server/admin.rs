@@ -64,6 +64,12 @@ pub struct UpdateKeyRequest {
     pub rate_limit_rps: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ChangeAdminKeyRequest {
+    pub current_key: String,
+    pub new_key: String,
+}
+
 /// GET /api/v1/admin/keys - List all API keys
 pub async fn list_keys_handler(
     State(state): State<AppState>,
@@ -183,6 +189,38 @@ pub async fn delete_key_handler(
 
     info!(key_id = %key_id, "API key deleted");
     Ok(responses::ok())
+}
+
+/// PATCH /api/v1/admin/admin-key - Replace the current admin key with a custom value.
+pub async fn change_admin_key_handler(
+    State(state): State<AppState>,
+    Json(request): Json<ChangeAdminKeyRequest>,
+) -> Result<impl IntoResponse, ApiErrorResponse> {
+    use crate::db::api_keys;
+
+    let current_key = request.current_key.trim().to_string();
+    let new_key = request.new_key.trim().to_string();
+
+    if current_key.is_empty() {
+        return Err(ApiErrorResponse::bad_request("current_key is required"));
+    }
+    if new_key.is_empty() {
+        return Err(ApiErrorResponse::bad_request("new_key is required"));
+    }
+
+    let replaced = state
+        .run_db(move |conn| api_keys::replace_key(&conn, &current_key, &new_key))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to replace admin key");
+            ApiErrorResponse::bad_request(&format!("Failed to replace admin key: {}", e))
+        })?
+        .ok_or_else(|| {
+            ApiErrorResponse::forbidden("Current key is invalid or is not an administrator key")
+        })?;
+
+    info!(key_id = %replaced.id, "Admin API key replaced");
+    Ok(responses::success(replaced))
 }
 
 // ============================================================================

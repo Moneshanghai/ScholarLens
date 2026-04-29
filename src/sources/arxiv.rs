@@ -123,11 +123,13 @@ async fn search_with_client(
         return Ok(Vec::new());
     }
 
+    let search_query = build_search_query(query);
     let max_results = options.max_results.max(1);
     let page_size = options.page_size.clamp(1, ARXIV_MAX_PER_REQUEST);
 
     info!(
         query = query,
+        search_query = %search_query,
         max_results = max_results,
         page_size = page_size,
         sort_by = %options.sort_by,
@@ -143,7 +145,7 @@ async fn search_with_client(
         let batch_size = remaining.min(page_size);
 
         let params = [
-            ("search_query", query.to_string()),
+            ("search_query", search_query.clone()),
             ("start", start.to_string()),
             ("max_results", batch_size.to_string()),
             ("sortBy", options.sort_by.clone()),
@@ -273,6 +275,65 @@ async fn search_with_client(
     Ok(out)
 }
 
+/// Convert user-entered plain keywords into explicit arXiv API syntax.
+///
+/// arXiv treats whitespace in a raw query as OR. For a normal search box, users
+/// expect multi-word keywords to narrow results, so plain tokens are joined with
+/// AND and prefixed with `all:`. Advanced arXiv syntax is preserved as-is.
+pub fn build_search_query(query: &str) -> String {
+    let trimmed = query.trim();
+    if trimmed.is_empty() || looks_like_advanced_arxiv_query(trimmed) {
+        return trimmed.to_string();
+    }
+
+    let terms = plain_query_terms(trimmed);
+    if terms.is_empty() {
+        return trimmed.to_string();
+    }
+
+    terms
+        .into_iter()
+        .map(|term| {
+            if term.chars().any(char::is_whitespace) {
+                format!("all:\"{}\"", term.replace('"', "\\\""))
+            } else {
+                format!("all:{term}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
+fn looks_like_advanced_arxiv_query(query: &str) -> bool {
+    let field_re = Regex::new(r"(?i)\b(all|ti|abs|au|cat|id|doi|jr|co|rn):")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let boolean_re = Regex::new(r"(?i)(\bAND\b|\bOR\b|\bANDNOT\b|\(|\))")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    field_re.is_match(query) || boolean_re.is_match(query)
+}
+
+fn plain_query_terms(query: &str) -> Vec<String> {
+    let term_re = Regex::new(r#""([^"]+)"|'([^']+)'|[^\s,;，；]+"#)
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let mut terms = Vec::new();
+    for cap in term_re.captures_iter(query) {
+        let raw = cap
+            .get(1)
+            .or_else(|| cap.get(2))
+            .or_else(|| cap.get(0))
+            .map(|m| m.as_str())
+            .unwrap_or_default();
+        let term = raw
+            .trim()
+            .trim_matches(|ch: char| matches!(ch, ',' | ';' | '，' | '；'))
+            .trim();
+        if !term.is_empty() {
+            terms.push(term.to_string());
+        }
+    }
+    terms
+}
+
 async fn send_arxiv_request(
     client: &Client,
     endpoint: &str,
@@ -303,9 +364,7 @@ fn parse_atom_entries(xml: &str) -> Vec<ArxivResult> {
         .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
     let author_re = Regex::new(r"(?s)<author>\s*<name>(.*?)</name>\s*</author>")
         .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
-    let pdf_link_re = Regex::new(r#"(?s)<link[^>]*title="pdf"[^>]*href="([^"]+)""#)
-        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
-    let alt_link_re = Regex::new(r#"(?s)<link[^>]*rel="alternate"[^>]*href="([^"]+)""#)
+    let link_re = Regex::new(r#"(?s)<link\b([^>]*)>"#)
         .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
 
     entry_re
@@ -317,8 +376,7 @@ fn parse_atom_entries(xml: &str) -> Vec<ArxivResult> {
             let published = capture_first(&published_re, entry).unwrap_or_default();
             let id_url = capture_first(&id_re, entry).unwrap_or_default();
             let doi = capture_first(&doi_re, entry).unwrap_or_default();
-            let pdf_url = capture_first(&pdf_link_re, entry).unwrap_or_default();
-            let alt_url = capture_first(&alt_link_re, entry).unwrap_or_default();
+            let (alt_url, pdf_url) = extract_link_urls(entry, &link_re);
             let authors = author_re
                 .captures_iter(entry)
                 .filter_map(|c| {
@@ -346,6 +404,50 @@ fn parse_atom_entries(xml: &str) -> Vec<ArxivResult> {
         })
         .filter(|paper| !paper.title.is_empty())
         .collect()
+}
+
+fn extract_link_urls(entry: &str, link_re: &Regex) -> (String, String) {
+    let mut alt_url = String::new();
+    let mut pdf_url = String::new();
+
+    for cap in link_re.captures_iter(entry) {
+        let attrs = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let Some(href) = attr_value(attrs, "href") else {
+            continue;
+        };
+        let rel = attr_value(attrs, "rel").unwrap_or_default().to_lowercase();
+        let title = attr_value(attrs, "title")
+            .unwrap_or_default()
+            .to_lowercase();
+        let media_type = attr_value(attrs, "type").unwrap_or_default().to_lowercase();
+
+        if alt_url.is_empty() && rel == "alternate" {
+            alt_url = href.clone();
+        }
+        if pdf_url.is_empty()
+            && (title == "pdf" || media_type == "application/pdf" || href.contains("/pdf/"))
+        {
+            pdf_url = href;
+        }
+    }
+
+    (alt_url, pdf_url)
+}
+
+fn attr_value(attrs: &str, name: &str) -> Option<String> {
+    let escaped = regex::escape(name);
+    let double_re = Regex::new(&format!(r#"{escaped}\s*=\s*"([^"]*)""#)).ok()?;
+    if let Some(value) = double_re
+        .captures(attrs)
+        .and_then(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+    {
+        return Some(decode_xml_entities(&value));
+    }
+
+    let single_re = Regex::new(&format!(r#"{escaped}\s*=\s*'([^']*)'"#)).ok()?;
+    single_re
+        .captures(attrs)
+        .and_then(|cap| cap.get(1).map(|m| decode_xml_entities(m.as_str())))
 }
 
 fn capture_first(re: &Regex, text: &str) -> Option<String> {
@@ -410,5 +512,39 @@ mod tests {
     fn test_decode_xml_entities() {
         let s = decode_xml_entities("A &amp; B &lt; C");
         assert_eq!(s, "A & B < C");
+    }
+
+    #[test]
+    fn test_build_search_query_plain_words_use_and_semantics() {
+        let query = build_search_query("machine learning, materials");
+        assert_eq!(query, "all:machine AND all:learning AND all:materials");
+    }
+
+    #[test]
+    fn test_build_search_query_preserves_advanced_arxiv_query() {
+        let query = build_search_query(r#"ti:"machine learning" AND cat:cs.LG"#);
+        assert_eq!(query, r#"ti:"machine learning" AND cat:cs.LG"#);
+    }
+
+    #[test]
+    fn test_parse_atom_entries_link_attributes_in_arxiv_order() {
+        let xml = r#"
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>https://arxiv.org/abs/2501.02842v1</id>
+    <published>2025-01-06T00:00:00Z</published>
+    <title>Foundations of GenIR</title>
+    <summary>Sample abstract text.</summary>
+    <author><name>Alice A</name></author>
+    <link href="https://arxiv.org/abs/2501.02842v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2501.02842v1" rel="related" type="application/pdf" title="pdf"/>
+  </entry>
+</feed>
+        "#;
+
+        let parsed = parse_atom_entries(xml);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].url, "https://arxiv.org/abs/2501.02842v1");
+        assert_eq!(parsed[0].pdf_url, "https://arxiv.org/pdf/2501.02842v1");
     }
 }
