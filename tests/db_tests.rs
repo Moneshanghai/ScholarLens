@@ -165,6 +165,7 @@ fn test_tasks_complete() {
         filtered_papers: 42,
         data: serde_json::json!([]),
         csv_path: None,
+        query_plan: None,
     };
     tasks::complete(&conn, &task_id, &result).expect("complete");
 

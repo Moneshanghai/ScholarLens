@@ -6,6 +6,7 @@ import { getTaskStatus, downloadCSV, downloadBibTeX } from '../api/client.js';
 import { router, escapeHtml } from '../main.js';
 import { historyManager } from '../utils/history.js';
 import { getPdfUrl } from '../utils/pdf-sort.js';
+import { renderQueryPlanPanel } from '../utils/query-plan.js';
 import {
   defaultSortDirection,
   getAuthorsString,
@@ -110,7 +111,9 @@ export class TaskPage {
                   </div>
                   <div id="source-stats" class="source-stats hidden"></div>
                 </div>
-                
+
+                <div id="query-plan-panel" class="query-plan-panel hidden"></div>
+                 
                 <div class="download-buttons">
                   <button id="download-csv" class="btn btn-secondary">
                     <i class="bi bi-download btn-icon"></i>
@@ -265,6 +268,7 @@ export class TaskPage {
 
     // Render per-source counts and errors
     this.renderSourceStats(result.source_counts, result.source_errors);
+    renderQueryPlanPanel(document.getElementById('query-plan-panel'), result.query_plan);
 
     this.currentPapers = result.data || [];
     this.sortPapers();

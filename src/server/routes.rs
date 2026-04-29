@@ -44,6 +44,7 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/keys/{id}", get(admin::get_key_handler))
         .route("/keys/{id}", patch(admin::update_key_handler))
         .route("/keys/{id}", delete(admin::delete_key_handler))
+        .route("/admin-key", patch(admin::change_admin_key_handler))
         // Cache
         .route("/cache/journals", get(admin::list_cache_handler))
         .route("/cache/journals", delete(admin::clear_cache_handler))

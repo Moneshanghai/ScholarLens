@@ -103,11 +103,40 @@ fn contains_cjk(value: &str) -> bool {
     })
 }
 
+fn build_query_plan_metadata(
+    query_plan: &SearchQueryPlan,
+    openalex_query: &str,
+    llm_enabled: bool,
+    used_llm_translation: bool,
+    used_llm_expansion: bool,
+    used_llm_filtering: bool,
+    used_llm_scoring: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "llm_enabled": llm_enabled,
+        "original_keyword": query_plan.original_keyword.clone(),
+        "primary_keyword": query_plan.primary_keyword(),
+        "translated_keyword": query_plan.translated_keyword.clone(),
+        "openalex_query": openalex_query,
+        "arxiv_query": crate::arxiv::build_search_query(query_plan.primary_keyword()),
+        "source_query": query_plan.primary_keyword(),
+        "expanded_terms": query_plan.expanded_terms.clone(),
+        "fallback_keywords": query_plan.fallback_keywords(),
+        "used_llm_translation": used_llm_translation,
+        "used_llm_expansion": used_llm_expansion,
+        "used_llm_filtering": used_llm_filtering,
+        "used_llm_scoring": used_llm_scoring,
+    })
+}
+
 /// Pipeline request from API
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PipelineRequest {
     /// Search keywords
     pub keyword: String,
+    /// Enable request-scoped LLM enhancement: translation, expansion, filtering, and scoring.
+    /// Defaults to true when omitted.
+    pub enable_llm: Option<bool>,
     /// Year lower bound filter
     pub ylo: Option<i32>,
     /// Enable Crossref metadata enrichment
@@ -167,6 +196,7 @@ pub struct PipelineConfig {
     pub sci: Option<String>,
 
     pub llm_strict_filter: bool,
+    pub enable_llm: bool,
     pub enable_llm_relevance: bool,
     sort_by: SortBy,
     /// User's description for keyword expansion and relevance filtering
@@ -179,7 +209,7 @@ impl PipelineConfig {
     pub fn from_request(
         req: PipelineRequest,
         server_easyscholar_keys: &[String],
-        _server_llm_enabled: bool,
+        server_llm_enabled: bool,
         server_llm_strict_filter: bool,
         server_default_ylo: Option<i32>,
         server_enable_crossref: bool,
@@ -220,6 +250,7 @@ impl PipelineConfig {
             server_enabled_sources,
         )?;
         let sort_by = resolve_sort_by(req.sort_by.as_deref(), req.sort_order.as_deref())?;
+        let enable_llm = req.enable_llm.unwrap_or(true);
 
         Ok(Self {
             keyword: req.keyword,
@@ -241,7 +272,8 @@ impl PipelineConfig {
             sci: req.sci,
 
             llm_strict_filter: req.llm_strict_filter.unwrap_or(server_llm_strict_filter),
-            enable_llm_relevance: _server_llm_enabled,
+            enable_llm,
+            enable_llm_relevance: enable_llm && server_llm_enabled,
             sort_by,
             content_help: req.content_help,
             output_dir,
@@ -469,6 +501,7 @@ impl ProgressTracker {
                         filtered_papers: result.filtered_papers,
                         data: result.data.clone(),
                         csv_path: result.csv_path.clone(),
+                        query_plan: result.query_plan.clone(),
                     };
                     match conn
                         .interact(move |conn| db_tasks::complete(conn, &task_id, &db_result))
@@ -614,10 +647,21 @@ async fn execute_pipeline(
     // Create output directory
     std::fs::create_dir_all(&config.output_dir)?;
 
-    // Stage 0: Keyword Translation (if non-English input and LLM available)
+    // Stage 0: Keyword Translation (if non-English input and LLM is enabled/available).
     // All downstream search/expansion uses the translated English keyword.
-    let search_keyword =
-        run_keyword_translation(tracker, &config.keyword, llm_filter.as_ref()).await;
+    let search_keyword = if config.enable_llm {
+        run_keyword_translation(tracker, &config.keyword, llm_filter.as_ref()).await
+    } else {
+        info!(
+            task_id = %task_id,
+            "LLM enhancement disabled for this task; using original keyword"
+        );
+        config.keyword.clone()
+    };
+    let used_llm_translation = config.enable_llm
+        && !search_keyword
+            .trim()
+            .eq_ignore_ascii_case(config.keyword.trim());
     info!(
         task_id = %task_id,
         original_keyword = %config.keyword,
@@ -626,8 +670,12 @@ async fn execute_pipeline(
     );
 
     // Stage 0.5: Keyword Expansion (based on translated English keyword)
-    let expanded_keywords =
-        run_keyword_expansion(tracker, &config, llm_filter.as_ref(), &search_keyword).await;
+    let expanded_keywords = if config.enable_llm {
+        run_keyword_expansion(tracker, &config, llm_filter.as_ref(), &search_keyword).await
+    } else {
+        Vec::new()
+    };
+    let used_llm_expansion = config.enable_llm && !expanded_keywords.is_empty();
     let query_plan = SearchQueryPlan::new(&config.keyword, &search_keyword, expanded_keywords);
     info!(
         task_id = %task_id,
@@ -979,7 +1027,7 @@ async fn execute_pipeline(
         &unfiltered_results,
     );
 
-    score_results_for_sorting(
+    let used_llm_scoring = score_results_for_sorting(
         tracker,
         &task_id,
         &keyword,
@@ -1034,6 +1082,15 @@ async fn execute_pipeline(
         filtered_papers: results_to_save.len(), // Report actual saved count
         data: serde_json::to_value(&results_to_save).unwrap_or(serde_json::Value::Null),
         csv_path: Some(csv_path.to_string_lossy().to_string()),
+        query_plan: Some(build_query_plan_metadata(
+            &query_plan,
+            &oa_query,
+            config.enable_llm,
+            used_llm_translation,
+            used_llm_expansion,
+            llm_filter_applied,
+            used_llm_scoring,
+        )),
         source_counts,
         source_errors,
     })
@@ -1047,9 +1104,9 @@ async fn score_results_for_sorting(
     sort_by: SortBy,
     llm_filter: Option<&std::sync::Arc<crate::llm::LlmRelevanceFilter>>,
     papers: &mut [PaperResult],
-) {
+) -> bool {
     if papers.is_empty() {
-        return;
+        return false;
     }
 
     tracker.update("Scoring relevance", 92).await;
@@ -1104,7 +1161,7 @@ async fn score_results_for_sorting(
                 llm_successes = llm_successes,
                 "Relevance scores assigned"
             );
-            return;
+            return true;
         }
     }
 
@@ -1119,6 +1176,7 @@ async fn score_results_for_sorting(
         papers = papers.len(),
         "Local fallback relevance scores assigned"
     );
+    false
 }
 
 /// Internal paper result structure (for JSON API response)
@@ -1215,6 +1273,7 @@ mod tests {
     fn test_request_validation() {
         let valid = PipelineRequest {
             keyword: "machine learning".to_string(),
+            enable_llm: None,
             ylo: None,
             enable_crossref: Some(true),
             sciif: None,
@@ -1240,6 +1299,7 @@ mod tests {
     fn test_pipeline_config_creation() {
         let req = PipelineRequest {
             keyword: "test".to_string(),
+            enable_llm: None,
             ylo: Some(2020),
             enable_crossref: Some(true),
             sciif: None,
@@ -1273,9 +1333,88 @@ mod tests {
     }
 
     #[test]
+    fn test_pipeline_config_disable_request_llm() {
+        let req = PipelineRequest {
+            keyword: "machine learning materials".to_string(),
+            enable_llm: Some(false),
+            ylo: None,
+            enable_crossref: Some(true),
+            sciif: None,
+            jci: None,
+            sci: None,
+            llm_strict_filter: None,
+            sort_by: None,
+            sort_order: None,
+            content_help: Some("materials discovery".to_string()),
+            source_include: None,
+            source_exclude: None,
+        };
+
+        let config = PipelineConfig::from_request(
+            req,
+            &[],
+            true,
+            false,
+            Some(2019),
+            true,
+            80,
+            120,
+            &["openalex".to_string(), "semanticscholar".to_string()],
+            &SearchOpenAlexSection::default(),
+            &SearchSemanticScholarSection::default(),
+            &SearchArxivSection::default(),
+            &SearchPubMedSection::default(),
+            &SearchXRxivSection::default(),
+        )
+        .expect("config");
+
+        assert!(!config.enable_llm);
+        assert!(!config.enable_llm_relevance);
+    }
+
+    #[test]
+    fn test_build_query_plan_metadata() {
+        let query_plan = SearchQueryPlan::new(
+            "machine learning, materials",
+            "machine learning, materials",
+            vec![
+                "materials informatics".to_string(),
+                "ML materials".to_string(),
+            ],
+        );
+
+        let metadata = build_query_plan_metadata(
+            &query_plan,
+            "(machine learning, materials) OR (materials informatics) OR (ML materials)",
+            true,
+            false,
+            true,
+            false,
+            true,
+        );
+
+        assert_eq!(metadata["llm_enabled"], true);
+        assert_eq!(metadata["original_keyword"], "machine learning, materials");
+        assert_eq!(metadata["primary_keyword"], "machine learning, materials");
+        assert_eq!(
+            metadata["openalex_query"],
+            "(machine learning, materials) OR (materials informatics) OR (ML materials)"
+        );
+        assert_eq!(
+            metadata["arxiv_query"],
+            "all:machine AND all:learning AND all:materials"
+        );
+        assert_eq!(metadata["source_query"], "machine learning, materials");
+        assert_eq!(metadata["expanded_terms"][0], "materials informatics");
+        assert_eq!(metadata["used_llm_expansion"], true);
+        assert_eq!(metadata["used_llm_scoring"], true);
+    }
+
+    #[test]
     fn test_pipeline_config_rejects_unknown_sort_by() {
         let req = PipelineRequest {
             keyword: "test".to_string(),
+            enable_llm: None,
             ylo: None,
             enable_crossref: Some(true),
             sciif: None,
@@ -1313,6 +1452,7 @@ mod tests {
     fn test_pipeline_config_prefers_per_source_limits_and_semantic_key() {
         let req = PipelineRequest {
             keyword: "test".to_string(),
+            enable_llm: None,
             ylo: None,
             enable_crossref: None,
             sciif: None,

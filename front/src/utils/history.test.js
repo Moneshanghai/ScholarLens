@@ -69,3 +69,35 @@ test('clearHistory hides previously synced server tasks from future merges', asy
   assert.deepEqual(manager.getHistory(), []);
 });
 
+test('clearHistory hides older server tasks even when they were not loaded yet', async () => {
+  globalThis.localStorage = createLocalStorage();
+  const originalNow = Date.now;
+  Date.now = () => 1_800_000_000_000;
+  try {
+    const { HistoryManager } = await import(`./history.js?test=${Date.now()}-cutoff`);
+    const manager = new HistoryManager();
+
+    manager.clearHistory();
+    manager.mergeServerHistory([
+      {
+        task_id: 'server-not-loaded-before-clear',
+        keyword: 'old server query',
+        status: 'completed',
+        created_at: 1_700_000_000_000,
+        updated_at: 1_700_000_060_000,
+      },
+      {
+        task_id: 'server-after-clear',
+        keyword: 'new server query',
+        status: 'completed',
+        created_at: 1_800_000_001_000,
+        updated_at: 1_800_000_060_000,
+      },
+    ]);
+
+    assert.deepEqual(manager.getHistory().map((item) => item.taskId), ['server-after-clear']);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+

@@ -4,6 +4,7 @@
 
 import { createTask, pollTaskStatus, downloadCSV, downloadBibTeX, fetchSources } from '../api/client.js';
 import { historyManager } from '../utils/history.js';
+import { renderQueryPlanPanel } from '../utils/query-plan.js';
 import { getPdfUrl } from '../utils/pdf-sort.js';
 import {
   defaultSortDirection,
@@ -102,6 +103,17 @@ export class HomePage {
                   rows="3"
                 ></textarea>
                 <p class="form-hint">可选：提供研究方向描述可提高筛选精准度</p>
+              </div>
+
+              <!-- LLM Enhancement Toggle -->
+              <div class="form-group">
+                <label class="llm-toggle-card" for="enable_llm">
+                  <input id="enable_llm" name="enable_llm" type="checkbox" checked>
+                  <span class="llm-toggle-copy">
+                    <strong>启用大模型增强</strong>
+                    <small>用于关键词翻译、关键词扩展、相关性筛选和语义评分；关闭后仅使用原始关键词和本地排序。</small>
+                  </span>
+                </label>
               </div>
 
               <!-- Source Selection -->
@@ -268,6 +280,8 @@ export class HomePage {
               <i class="bi bi-info-circle"></i>
               <span>搜索结果将在 10 分钟后自动清理，请及时下载所需数据</span>
             </div>
+
+            <div id="query-plan-panel" class="query-plan-panel hidden"></div>
             
             <div id="results-table-container" class="results-table-container">
               <!-- Table will be inserted here -->
@@ -400,6 +414,7 @@ export class HomePage {
     const params = {
       keyword: formData.get('keyword'),
       enable_crossref: true,
+      enable_llm: formData.get('enable_llm') === 'on',
     };
 
     const ylo = formData.get('ylo');
@@ -517,6 +532,7 @@ export class HomePage {
     document.getElementById('filtered-papers').textContent = filtered;
 
     this.currentPapers = result.result?.data || [];
+    renderQueryPlanPanel(document.getElementById('query-plan-panel'), result.result?.query_plan);
     this.currentSortColumn = this.initialSortColumn;
     this.currentSortDirection = this.initialSortDirection;
     this.sortPapers();

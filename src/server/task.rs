@@ -54,6 +54,9 @@ pub struct TaskResult {
     pub data: serde_json::Value,
     /// CSV file path (if generated)
     pub csv_path: Option<String>,
+    /// Search query metadata shown to users for transparency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_plan: Option<serde_json::Value>,
     /// Per-source paper counts (before merge/dedup)
     pub source_counts: std::collections::HashMap<String, usize>,
     /// Per-source error messages (sources that failed)
@@ -137,6 +140,7 @@ impl Task {
             filtered_papers: r.filtered_papers,
             data: r.data.clone(),
             csv_path: r.csv_path.clone(),
+            query_plan: r.query_plan.clone(),
             source_counts: std::collections::HashMap::new(),
             source_errors: std::collections::HashMap::new(),
         });
@@ -366,6 +370,7 @@ mod tests {
             filtered_papers: 50,
             data: serde_json::json!([]),
             csv_path: Some("/tmp/test.csv".to_string()),
+            query_plan: None,
             source_counts: std::collections::HashMap::new(),
             source_errors: std::collections::HashMap::new(),
         };

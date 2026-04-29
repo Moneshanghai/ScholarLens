@@ -116,6 +116,8 @@ pub struct TaskResultResponse {
     pub filtered_papers: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_plan: Option<serde_json::Value>,
     pub data: serde_json::Value,
     /// Per-source paper counts (before merge/dedup)
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
@@ -389,6 +391,7 @@ pub async fn task_status_handler(
         total_papers: r.total_papers,
         filtered_papers: r.filtered_papers,
         csv_path: r.csv_path,
+        query_plan: r.query_plan,
         data: r.data,
         source_counts: r.source_counts,
         source_errors: r.source_errors,

@@ -42,6 +42,37 @@ async fn test_arxiv_live_fetch_small_batch() {
 
 #[tokio::test]
 #[ignore = "requires external network access"]
+async fn test_arxiv_live_fetch_multiword_query_returns_pdf_links() {
+    let config = load_config();
+    let options = arxiv::ArxivQueryOptions {
+        max_results: 3,
+        page_size: 3,
+        sort_by: config.search.arxiv.sort_by.clone(),
+        sort_order: config.search.arxiv.sort_order.clone(),
+        timeout_secs: config.search.arxiv.timeout_sec,
+        request_delay_ms: 500,
+    };
+
+    let papers = arxiv::search_papers("machine learning, materials", &options)
+        .await
+        .expect("arxiv multiword live request should not fail");
+    print_header("arXiv multiword");
+    println!("fetched={} (max={})", papers.len(), options.max_results);
+    for (idx, paper) in papers.iter().enumerate() {
+        println!(
+            "#{} title={} | year={} | pdf={}",
+            idx + 1,
+            paper.title,
+            paper.year,
+            paper.pdf_url
+        );
+    }
+    assert!(!papers.is_empty());
+    assert!(papers.iter().all(|paper| !paper.pdf_url.is_empty()));
+}
+
+#[tokio::test]
+#[ignore = "requires external network access"]
 async fn test_pubmed_live_fetch_small_batch() {
     let config = load_config();
     let options = pubmed::PubMedQueryOptions {

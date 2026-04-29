@@ -60,6 +60,8 @@ pub struct TaskResult {
     pub filtered_papers: usize,
     pub data: serde_json::Value,
     pub csv_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_plan: Option<serde_json::Value>,
 }
 
 /// Task entity
@@ -311,6 +313,7 @@ mod tests {
             filtered_papers: 50,
             data: serde_json::json!([]),
             csv_path: Some("/tmp/test.csv".to_string()),
+            query_plan: None,
         };
         complete(&conn, &task.id, &result).expect("complete");
         let completed = get_by_id(&conn, &task.id).expect("get").expect("found");
