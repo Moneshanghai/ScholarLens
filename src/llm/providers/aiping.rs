@@ -1,4 +1,4 @@
-use super::ProviderRegistry;
+﻿use super::ProviderRegistry;
 use super::super::provider_core::{to_openai_messages, ProviderRuntime, ProviderTrial};
 use super::super::{ChatMessage, LlmProvider};
 use crate::error::{GscholarError, Result};
@@ -102,7 +102,7 @@ impl ProviderTrial for AiPingProvider {
         }
 
         debug!(
-            provider = self.runtime.provider_name,
+            provider = %self.runtime.provider_name,
             chunks = chunk_count,
             content_size = full_content.len(),
             "Parsed provider streaming response"
@@ -126,7 +126,7 @@ impl ProviderTrial for AiPingProvider {
 #[async_trait]
 impl LlmProvider for AiPingProvider {
     fn name(&self) -> &str {
-        self.runtime.provider_name
+        self.runtime.provider_name.as_str()
     }
 
     async fn chat_completion(&self, messages: Vec<ChatMessage>) -> Result<String> {

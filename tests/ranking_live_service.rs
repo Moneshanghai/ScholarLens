@@ -2,15 +2,14 @@ use rscholar::rankings::{RankingBatchRequest, RankingService, RankingServiceOpti
 use rscholar::server::config::ServerConfig;
 use std::sync::Arc;
 use std::sync::Once;
-use uuid::Uuid;
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
 static TEST_LOG_INIT: Once = Once::new();
 
 fn init_test_tracing() {
     TEST_LOG_INIT.call_once(|| {
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("info"));
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_target(true)
@@ -55,8 +54,10 @@ async fn test_ranking_service_live_query_single_journal() {
 
     let metrics = result.by_venue.get(&venue);
     println!("venue: {}", venue);
-    println!("stats: cache_hits={}, cache_misses={}, api_hits={}, chunk_size={}",
-        result.cache_hits, result.cache_misses, result.api_hits, result.chunk_size_granted);
+    println!(
+        "stats: cache_hits={}, cache_misses={}, api_hits={}, chunk_size={}",
+        result.cache_hits, result.cache_misses, result.api_hits, result.chunk_size_granted
+    );
     println!("metrics: {:?}", metrics);
 
     assert_eq!(

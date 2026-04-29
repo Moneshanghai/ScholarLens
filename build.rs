@@ -37,5 +37,6 @@ fn main() {
     out.push_str("}\n");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
-    fs::write(out_dir.join("llm_providers_gen.rs"), out).expect("failed to write llm_providers_gen.rs");
+    fs::write(out_dir.join("llm_providers_gen.rs"), out)
+        .expect("failed to write llm_providers_gen.rs");
 }

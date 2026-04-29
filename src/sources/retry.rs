@@ -32,7 +32,9 @@ pub(crate) fn next_rate_limit_delay(
     }
 
     let fallback = exponential_delay(policy.base_delay, attempt).min(policy.max_delay);
-    let requested = retry_after_delay(headers).unwrap_or(fallback).min(policy.max_delay);
+    let requested = retry_after_delay(headers)
+        .unwrap_or(fallback)
+        .min(policy.max_delay);
     let remaining = policy.max_total_wait.saturating_sub(total_waited);
     let delay = requested.min(remaining);
     if delay.is_zero() {
@@ -43,7 +45,9 @@ pub(crate) fn next_rate_limit_delay(
 }
 
 fn exponential_delay(base: Duration, attempt: u32) -> Duration {
-    let factor = 1u32.checked_shl(attempt.saturating_sub(1).min(10)).unwrap_or(1024);
+    let factor = 1u32
+        .checked_shl(attempt.saturating_sub(1).min(10))
+        .unwrap_or(1024);
     base.saturating_mul(factor)
 }
 

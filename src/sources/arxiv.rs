@@ -160,7 +160,8 @@ async fn search_with_client(
             let mut server_error_retries = 0u32;
 
             let page_resp = loop {
-                match send_arxiv_request(client, endpoint, &params, options.request_delay_ms).await {
+                match send_arxiv_request(client, endpoint, &params, options.request_delay_ms).await
+                {
                     Ok(resp) => {
                         let status = resp.status();
                         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {

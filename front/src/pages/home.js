@@ -40,6 +40,7 @@ export class HomePage {
           </button>
           <a href="/" class="header-logo">ScholarLens</a>
           <a href="/docs" class="header-link"><i class="bi bi-file-earmark-text"></i> API 文档</a>
+          <a href="/settings" class="header-link"><i class="bi bi-gear"></i> 模型配置</a>
         </div>
       </header>
 

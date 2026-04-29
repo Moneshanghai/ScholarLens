@@ -10,7 +10,10 @@ mod types;
 
 pub use client::RankingClient;
 pub use pool::{KeyHealthPolicy, KeyState, RankingClientPool};
-pub use service::{LeasePolicy, RankingBatchRequest, RankingBatchResult, RankingService, RankingServiceOptions, SchedulerMode};
+pub use service::{
+    LeasePolicy, RankingBatchRequest, RankingBatchResult, RankingService, RankingServiceOptions,
+    SchedulerMode,
+};
 pub use types::RankingMetrics;
 
 #[cfg(test)]

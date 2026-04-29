@@ -85,7 +85,8 @@ impl RankingClient {
     async fn wait_for_rate_limit(&self) {
         let should_wait = {
             let last = self.last_request.lock().ok();
-            last.and_then(|l| *l).map(|t| t.elapsed() < MIN_REQUEST_INTERVAL)
+            last.and_then(|l| *l)
+                .map(|t| t.elapsed() < MIN_REQUEST_INTERVAL)
         };
 
         if should_wait == Some(true) {
@@ -116,11 +117,7 @@ impl RankingClient {
 
         if !response.status().is_success() {
             let code = response.status().as_u16() as i32;
-            warn!(
-                venue = venue_name,
-                status = code,
-                "EasyScholar API error"
-            );
+            warn!(venue = venue_name, status = code, "EasyScholar API error");
             return Err(GscholarError::Api {
                 code,
                 message: "EasyScholar API returned non-success status".to_string(),
@@ -147,7 +144,9 @@ impl RankingClient {
             );
             return Err(GscholarError::Api {
                 code: data.code,
-                message: data.msg.unwrap_or_else(|| "EasyScholar business error".to_string()),
+                message: data
+                    .msg
+                    .unwrap_or_else(|| "EasyScholar business error".to_string()),
             });
         }
 
@@ -156,7 +155,10 @@ impl RankingClient {
         if has_data {
             info!(venue = venue_name, "Found ranking data");
         } else {
-            debug!(venue = venue_name, "No ranking data found (will cache empty)");
+            debug!(
+                venue = venue_name,
+                "No ranking data found (will cache empty)"
+            );
         }
         Ok(Some(result))
     }

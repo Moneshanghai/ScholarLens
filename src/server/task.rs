@@ -124,7 +124,7 @@ impl Task {
     /// Create task from database entity
     pub fn from_db_task(db_task: &crate::db::tasks::Task) -> Self {
         use crate::db::tasks::TaskStatus as DbStatus;
-        
+
         let status = match db_task.status {
             DbStatus::Pending => TaskStatus::Pending,
             DbStatus::Running => TaskStatus::Running,
@@ -180,7 +180,7 @@ impl Task {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
-                .unwrap_or(0)
+                .unwrap_or(0),
         );
     }
 
@@ -194,7 +194,7 @@ impl Task {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
-                .unwrap_or(0)
+                .unwrap_or(0),
         );
     }
 }
@@ -263,7 +263,7 @@ impl TaskStore {
     }
 
     /// Cleanup completed/failed tasks based on TTL after completion
-    /// 
+    ///
     /// Running tasks are never cleaned up (they're still executing).
     /// Only completed or failed tasks are removed after ttl_secs from completion.
     pub fn cleanup_completed(&self, ttl_secs: u64) {
@@ -278,7 +278,7 @@ impl TaskStore {
             if task.status == TaskStatus::Pending || task.status == TaskStatus::Running {
                 return true;
             }
-            
+
             // For completed/failed tasks, check TTL from completion time
             if let Some(completed_at) = task.completed_at {
                 let age = now.saturating_sub(completed_at);
@@ -291,7 +291,11 @@ impl TaskStore {
         });
 
         if removed > 0 {
-            info!(removed = removed, ttl_secs = ttl_secs, "Cleaned up completed tasks from memory");
+            info!(
+                removed = removed,
+                ttl_secs = ttl_secs,
+                "Cleaned up completed tasks from memory"
+            );
         }
     }
 
@@ -313,7 +317,11 @@ impl TaskStore {
         });
 
         if removed > 0 {
-            info!(removed = removed, ttl_secs = ttl_secs, "Cleaned up old tasks");
+            info!(
+                removed = removed,
+                ttl_secs = ttl_secs,
+                "Cleaned up old tasks"
+            );
         }
     }
 

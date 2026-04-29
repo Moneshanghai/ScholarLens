@@ -96,7 +96,9 @@ impl Task {
 
 /// Insert a new task
 pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
-    let result_json = task.result.as_ref()
+    let result_json = task
+        .result
+        .as_ref()
         .map(|r| serde_json::to_string(r).unwrap_or_default());
 
     conn.execute(
@@ -191,14 +193,20 @@ pub fn fail(conn: &Connection, id: &str, error: &str) -> Result<()> {
 
 /// Delete a task
 pub fn delete(conn: &Connection, id: &str) -> Result<bool> {
-    let rows = conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])
+    let rows = conn
+        .execute("DELETE FROM tasks WHERE id = ?1", params![id])
         .map_err(|e| GscholarError::Database(format!("Delete task failed: {}", e)))?;
-    
+
     Ok(rows > 0)
 }
 
 /// List tasks with pagination
-pub fn list(conn: &Connection, page: u32, limit: u32, status_filter: Option<&str>) -> Result<(Vec<Task>, i64)> {
+pub fn list(
+    conn: &Connection,
+    page: u32,
+    limit: u32,
+    status_filter: Option<&str>,
+) -> Result<(Vec<Task>, i64)> {
     let offset = (page.saturating_sub(1)) * limit;
 
     // Get total count
@@ -207,9 +215,11 @@ pub fn list(conn: &Connection, page: u32, limit: u32, status_filter: Option<&str
             "SELECT COUNT(*) FROM tasks WHERE status = ?1",
             params![status],
             |row| row.get(0),
-        ).unwrap_or(0)
+        )
+        .unwrap_or(0)
     } else {
-        conn.query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0)).unwrap_or(0)
+        conn.query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+            .unwrap_or(0)
     };
 
     // Query with pagination
@@ -221,14 +231,16 @@ pub fn list(conn: &Connection, page: u32, limit: u32, status_filter: Option<&str
          FROM tasks ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
     };
 
-    let mut stmt = conn.prepare(sql)
+    let mut stmt = conn
+        .prepare(sql)
         .map_err(|e| GscholarError::Database(format!("Prepare failed: {}", e)))?;
 
     let rows = if let Some(status) = status_filter {
         stmt.query_map(params![status, limit, offset], row_to_task)
     } else {
         stmt.query_map(params![limit, offset], row_to_task)
-    }.map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
+    }
+    .map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
 
     let tasks: Vec<Task> = rows.filter_map(|r| r.ok()).collect();
     Ok((tasks, total))
@@ -257,11 +269,10 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
 /// Cleanup old tasks
 pub fn cleanup(conn: &Connection, ttl_secs: i64) -> Result<usize> {
     let cutoff = chrono::Utc::now().timestamp() - ttl_secs;
-    
-    let rows = conn.execute(
-        "DELETE FROM tasks WHERE created_at < ?1",
-        params![cutoff],
-    ).map_err(|e| GscholarError::Database(format!("Cleanup failed: {}", e)))?;
+
+    let rows = conn
+        .execute("DELETE FROM tasks WHERE created_at < ?1", params![cutoff])
+        .map_err(|e| GscholarError::Database(format!("Cleanup failed: {}", e)))?;
 
     Ok(rows)
 }
@@ -280,7 +291,7 @@ mod tests {
     #[test]
     fn test_task_crud() {
         let conn = setup_db();
-        
+
         // Insert
         let task = Task::new("machine learning", "openalex");
         insert(&conn, &task).expect("insert");
@@ -313,7 +324,7 @@ mod tests {
     #[test]
     fn test_task_list() {
         let conn = setup_db();
-        
+
         for i in 0..5 {
             let task = Task::new(&format!("keyword {}", i), "openalex");
             insert(&conn, &task).expect("insert");

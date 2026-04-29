@@ -42,8 +42,18 @@ pub struct EnrichedInput {
 
 /// CSV column order for unified output
 pub const UNIFIED_COLUMNS: &[&str] = &[
-    "title", "author", "date", "doi", "article_url", "pdf_url", 
-    "abstract_text", "tldr", "journal", "if_score", "jci_score", "sci_partition"
+    "title",
+    "author",
+    "date",
+    "doi",
+    "article_url",
+    "pdf_url",
+    "abstract_text",
+    "tldr",
+    "journal",
+    "if_score",
+    "jci_score",
+    "sci_partition",
 ];
 
 /// Generate unified results by joining EasyScholar with Semantic Scholar data.

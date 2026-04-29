@@ -1,9 +1,9 @@
 //! Shared application state for the HTTP server.
 //!
 //! Contains all shared resources accessed by handlers.
-//! 
+//!
 //! ## Async-Safe Database Access
-//! 
+//!
 //! Uses deadpool-sqlite's `interact()` method which automatically
 //! runs blocking SQLite operations on a separate thread pool.
 
@@ -12,6 +12,7 @@ use super::task::TaskStore;
 use crate::db::DbPool;
 use crate::error::{GscholarError, Result};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::info;
 
 /// Default busy timeout for SQLite connections (5 seconds)
@@ -29,7 +30,7 @@ pub struct AppState {
     /// Database connection pool (async-safe)
     pub db: DbPool,
     /// LLM Relevance Filter (optional, global concurrency control)
-    pub llm_filter: Option<Arc<crate::llm::LlmRelevanceFilter>>,
+    pub llm_filter: Arc<RwLock<Option<Arc<crate::llm::LlmRelevanceFilter>>>>,
     /// Ranking microservice (optional when easyscholar keys are not configured)
     pub ranking_service: Option<Arc<crate::rankings::RankingService>>,
     /// SQLite busy timeout in ms
@@ -43,7 +44,7 @@ impl AppState {
     /// * `config` - Server configuration
     /// * `db` - Deadpool SQLite connection pool
     pub fn new(
-        config: ServerConfig, 
+        config: ServerConfig,
         db: DbPool,
         llm_filter: Option<Arc<crate::llm::LlmRelevanceFilter>>,
         ranking_service: Option<Arc<crate::rankings::RankingService>>,
@@ -59,7 +60,7 @@ impl AppState {
             config: Arc::new(config),
             task_store: TaskStore::new(),
             db,
-            llm_filter,
+            llm_filter: Arc::new(RwLock::new(llm_filter)),
             ranking_service,
             busy_timeout_ms: DEFAULT_BUSY_TIMEOUT_MS,
         }
@@ -89,21 +90,48 @@ impl AppState {
         T: Send + 'static,
     {
         let busy_timeout = self.busy_timeout_ms;
-        
+
         // Get connection from pool (with timeout)
-        let conn = self.db.get().await
+        let conn = self
+            .db
+            .get()
+            .await
             .map_err(|e| GscholarError::Database(format!("Pool timeout: {}", e)))?;
-        
+
         // Run the blocking operation via interact()
         conn.interact(move |conn| {
             // Configure connection if not already done
             // SQLite pragmas are per-connection, so we set them each time
             let _ = conn.pragma_update(None, "busy_timeout", busy_timeout);
-            
+
             // Execute the user's function
             f(conn)
         })
         .await
         .map_err(|e| GscholarError::Database(format!("DB interact error: {}", e)))?
+    }
+
+    pub async fn current_llm_filter(&self) -> Option<Arc<crate::llm::LlmRelevanceFilter>> {
+        self.llm_filter.read().await.clone()
+    }
+
+    pub fn has_llm_filter(&self) -> bool {
+        self.llm_filter
+            .try_read()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
+    }
+
+    pub async fn set_llm_filter(&self, filter: Option<Arc<crate::llm::LlmRelevanceFilter>>) {
+        *self.llm_filter.write().await = filter;
+    }
+
+    pub async fn reload_llm_from_db(&self) -> Result<()> {
+        let configs = self
+            .run_db(crate::db::llm_providers::list_enabled_runtime)
+            .await?;
+        let filter = crate::llm::LlmRelevanceFilter::build_from_runtime_configs(&configs)?;
+        self.set_llm_filter(filter).await;
+        Ok(())
     }
 }

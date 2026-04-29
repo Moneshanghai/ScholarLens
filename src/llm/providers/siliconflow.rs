@@ -1,4 +1,4 @@
-use super::ProviderRegistry;
+﻿use super::ProviderRegistry;
 use super::super::provider_core::{to_openai_messages, ProviderRuntime, ProviderTrial};
 use super::super::{ChatMessage, LlmProvider};
 use crate::error::{GscholarError, Result};
@@ -76,7 +76,7 @@ impl ProviderTrial for SiliconFlowProvider {
             .to_string();
 
         debug!(
-            provider = self.runtime.provider_name,
+            provider = %self.runtime.provider_name,
             content_size = content.len(),
             "Parsed provider JSON response"
         );
@@ -99,7 +99,7 @@ impl ProviderTrial for SiliconFlowProvider {
 #[async_trait]
 impl LlmProvider for SiliconFlowProvider {
     fn name(&self) -> &str {
-        self.runtime.provider_name
+        self.runtime.provider_name.as_str()
     }
 
     async fn chat_completion(&self, messages: Vec<ChatMessage>) -> Result<String> {

@@ -14,6 +14,7 @@
 pub mod analytics;
 pub mod api_keys;
 pub mod journal_cache;
+pub mod llm_providers;
 pub mod schema;
 pub mod tasks;
 
@@ -47,9 +48,9 @@ impl Default for DbConfig {
     fn default() -> Self {
         Self {
             path: "data/rscholar.db".to_string(),
-            max_connections: 4,        // SQLite prefers small pools
-            pool_timeout_secs: 5,      // Don't wait forever for connection
-            busy_timeout_ms: 5000,     // 5 seconds for busy timeout
+            max_connections: 4,    // SQLite prefers small pools
+            pool_timeout_secs: 5,  // Don't wait forever for connection
+            busy_timeout_ms: 5000, // 5 seconds for busy timeout
         }
     }
 }
@@ -79,8 +80,9 @@ pub fn init_pool(config: &DbConfig) -> Result<DbPool> {
 
     // Create deadpool config
     let cfg = Config::new(&config.path);
-    
-    let pool = cfg.builder(Runtime::Tokio1)
+
+    let pool = cfg
+        .builder(Runtime::Tokio1)
         .map_err(|e| GscholarError::Database(format!("Failed to create pool builder: {}", e)))?
         .max_size(config.max_connections)
         .wait_timeout(Some(Duration::from_secs(config.pool_timeout_secs)))
@@ -92,10 +94,10 @@ pub fn init_pool(config: &DbConfig) -> Result<DbPool> {
     {
         let conn = Connection::open(&config.path)
             .map_err(|e| GscholarError::Database(format!("Failed to open database: {}", e)))?;
-        
+
         // Configure SQLite for production
         configure_connection(&conn, busy_timeout)?;
-        
+
         // Initialize tables
         schema::init_tables(&conn)?;
     }
@@ -109,35 +111,39 @@ pub fn configure_connection(conn: &Connection, busy_timeout_ms: u32) -> Result<(
     // WAL mode for better concurrent read performance
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| GscholarError::Database(format!("Failed to set WAL mode: {}", e)))?;
-    
+
     // Busy timeout - wait instead of failing immediately when locked
     conn.pragma_update(None, "busy_timeout", busy_timeout_ms)
         .map_err(|e| GscholarError::Database(format!("Failed to set busy_timeout: {}", e)))?;
-    
+
     // Synchronous mode for durability (NORMAL is a good balance)
     conn.pragma_update(None, "synchronous", "NORMAL")
         .map_err(|e| GscholarError::Database(format!("Failed to set synchronous: {}", e)))?;
-    
+
     // Cache size (negative = KB, so -2000 = 2MB)
     conn.pragma_update(None, "cache_size", -2000i32)
         .map_err(|e| GscholarError::Database(format!("Failed to set cache_size: {}", e)))?;
-    
+
     Ok(())
 }
 
 /// Get a connection from the pool (async)
 ///
 /// Returns an error if timeout expires waiting for a connection.
-pub async fn get_conn_async(pool: &DbPool, busy_timeout_ms: u32) -> Result<deadpool_sqlite::Object> {
-    let obj = pool.get().await
+pub async fn get_conn_async(
+    pool: &DbPool,
+    busy_timeout_ms: u32,
+) -> Result<deadpool_sqlite::Object> {
+    let obj = pool
+        .get()
+        .await
         .map_err(|e| GscholarError::Database(format!("Pool timeout: {}", e)))?;
-    
+
     // Configure connection on first use
-    obj.interact(move |conn| {
-        configure_connection(conn, busy_timeout_ms)
-    }).await
-    .map_err(|e| GscholarError::Database(format!("Connection config failed: {}", e)))??;
-    
+    obj.interact(move |conn| configure_connection(conn, busy_timeout_ms))
+        .await
+        .map_err(|e| GscholarError::Database(format!("Connection config failed: {}", e)))??;
+
     Ok(obj)
 }
 
@@ -155,7 +161,7 @@ mod tests {
             pool_timeout_secs: 5,
             busy_timeout_ms: 1000,
         };
-        
+
         let pool = init_pool(&config);
         assert!(pool.is_ok());
     }
@@ -164,10 +170,10 @@ mod tests {
     fn test_wal_mode() {
         let tmp = TempDir::new().expect("temp dir");
         let db_path = tmp.path().join("wal_test.db");
-        
+
         let conn = Connection::open(&db_path).expect("open");
         configure_connection(&conn, 5000).expect("configure");
-        
+
         // Verify WAL mode
         let mode: String = conn
             .pragma_query_value(None, "journal_mode", |row| row.get(0))

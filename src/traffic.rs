@@ -3,8 +3,8 @@
 //! This module provides a thread-safe global collector to track
 //! bytes sent and received during HTTP requests.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use once_cell::sync::Lazy;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::debug;
 
 /// Global traffic statistics

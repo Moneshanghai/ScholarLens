@@ -11,12 +11,10 @@
 use super::SearchArgs;
 use anyhow::{Context, Result};
 use chrono::Local;
-use rscholar::{
-    db, openalex, semanticscholar, traffic, unified,
-};
+use rscholar::{db, openalex, semanticscholar, traffic, unified};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use rusqlite::Connection;
 use tracing::{info, warn};
 
 /// Run the full search pipeline
@@ -42,7 +40,9 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
 
     if filter_active && args.easyscholar_key.is_none() {
         warn!("CLI search aborted: filters require --easyscholar-key");
-        anyhow::bail!("EasyScholar filters (sciif, jci, sci, etc.) require --easyscholar-key provided.");
+        anyhow::bail!(
+            "EasyScholar filters (sciif, jci, sci, etc.) require --easyscholar-key provided."
+        );
     }
 
     // Calculate year filter (default: current year - 5)
@@ -79,10 +79,14 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
     let mut enriched_list: Vec<EnrichedResult>;
 
     if args.source == "openalex" {
-        enriched_list = run_openalex_pipeline(&args.keyword, &pages, ylo_val, &output_folder).await?;
+        enriched_list =
+            run_openalex_pipeline(&args.keyword, &pages, ylo_val, &output_folder).await?;
     } else {
         warn!(source = %args.source, "CLI search received unsupported source");
-        anyhow::bail!("Invalid source: {}. Supported source: openalex", args.source);
+        anyhow::bail!(
+            "Invalid source: {}. Supported source: openalex",
+            args.source
+        );
     }
 
     // ===========================================
@@ -156,7 +160,11 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
 
     // Save merged
     let merged_path = output_folder.join("2_merged.csv");
-    save_csv(&merged_path, &enriched_list, &["title", "doi", "abstract_text"])?;
+    save_csv(
+        &merged_path,
+        &enriched_list,
+        &["title", "doi", "abstract_text"],
+    )?;
     println!("Merged {} papers", enriched_list.len());
 
     // ===========================================
@@ -172,10 +180,7 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
         println!("Processing {} papers", reranked_list.len());
 
         let ranking_pool = rscholar::rankings::RankingClientPool::new(&keys)?;
-        println!(
-            "Using {} EasyScholar API keys",
-            ranking_pool.key_count()
-        );
+        println!("Using {} EasyScholar API keys", ranking_pool.key_count());
 
         let filter_active = args.sciif.is_some()
             || args.jci.is_some()
@@ -194,17 +199,21 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
             .collect();
 
         println!("Found {} unique journals to query", unique_journals.len());
-        info!(unique_journals = unique_journals.len(), "Prepared journal list for ranking stage");
+        info!(
+            unique_journals = unique_journals.len(),
+            "Prepared journal list for ranking stage"
+        );
 
         // Cache + API Strategy
         let mut journal_rankings: std::collections::HashMap<
             String,
             Option<rscholar::rankings::RankingMetrics>,
         > = std::collections::HashMap::new();
-        
+
         let mut to_fetch = Vec::new();
-        let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "data/rscholar.db".to_string());
-        
+        let db_path =
+            std::env::var("DATABASE_URL").unwrap_or_else(|_| "data/rscholar.db".to_string());
+
         // 1. Check SQLite Cache
         let mut cache_hits = 0;
         match Connection::open(&db_path) {
@@ -212,7 +221,7 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
                 for journal in &unique_journals {
                     // Try to get from cache
                     let cached = db::journal_cache::get(&conn, journal).ok().flatten();
-                    
+
                     if let Some(c) = cached {
                         let metrics = rscholar::rankings::RankingMetrics {
                             sciif: c.sciif,
@@ -234,23 +243,31 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
                 to_fetch = unique_journals.clone();
             }
         }
-        
-        println!("Cache hit: {}. Need to fetch: {}.", cache_hits, to_fetch.len());
-        info!(cache_hits, to_fetch = to_fetch.len(), "Ranking cache check complete");
+
+        println!(
+            "Cache hit: {}. Need to fetch: {}.",
+            cache_hits,
+            to_fetch.len()
+        );
+        info!(
+            cache_hits,
+            to_fetch = to_fetch.len(),
+            "Ranking cache check complete"
+        );
 
         // 2. Fetch missing from API
         if !to_fetch.is_empty() {
             let api_results = ranking_pool.batch_lookup(&to_fetch).await;
-            
+
             // 3. Save to DB and Update Map
             let conn_opt = Connection::open(&db_path).ok();
-            
+
             for (journal, res_opt) in to_fetch.iter().zip(api_results.into_iter()) {
                 journal_rankings.insert(journal.clone(), res_opt.clone());
-                
+
                 if let Some(metrics) = res_opt {
                     if let Some(ref conn) = conn_opt {
-                         let entry = db::journal_cache::JournalRanking {
+                        let entry = db::journal_cache::JournalRanking {
                             name: journal.clone(),
                             sciif: metrics.sciif.clone(),
                             jci: metrics.jci.clone(),
@@ -265,7 +282,7 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
                 }
             }
         }
-        
+
         println!("Completed querying journals.");
         info!("Ranking stage completed for CLI pipeline");
 
@@ -286,10 +303,17 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
             all_with_rankings.push(item);
         }
 
-        println!("Enriched: {} results with ranking data", all_with_rankings.len());
+        println!(
+            "Enriched: {} results with ranking data",
+            all_with_rankings.len()
+        );
 
         let es_path = output_folder.join("4_easyscholar.csv");
-        save_csv(&es_path, &all_with_rankings, &["title", "if_score", "sci_partition"])?;
+        save_csv(
+            &es_path,
+            &all_with_rankings,
+            &["title", "if_score", "sci_partition"],
+        )?;
 
         // Apply filters
         let filtered_list: Vec<EnrichedResult> = if filter_active {
@@ -304,29 +328,39 @@ pub async fn run_search_pipeline(args: SearchArgs) -> Result<()> {
         if filter_active {
             println!("Filtered: {} results", filtered_list.len());
             let filtered_path = output_folder.join("5_easyscholar_filtered.csv");
-            save_csv(&filtered_path, &filtered_list, &["title", "if_score", "sci_partition"])?;
+            save_csv(
+                &filtered_path,
+                &filtered_list,
+                &["title", "if_score", "sci_partition"],
+            )?;
         }
 
         // Create final output
         create_final_output(&filtered_list, &ss_results, &output_folder)?;
-        
+
         // Log analytics to DB
         log_search_analytics(
             &args.keyword,
             &args.source,
             filtered_list.len(),
-            &filtered_list.iter().map(|r| r.journal.clone()).collect::<Vec<_>>(),
+            &filtered_list
+                .iter()
+                .map(|r| r.journal.clone())
+                .collect::<Vec<_>>(),
         );
     } else {
         println!("\n--- Stage 4: Skipped (no --easyscholar-key provided) ---");
         create_final_output(&reranked_list, &ss_results, &output_folder)?;
-        
+
         // Log analytics to DB
         log_search_analytics(
             &args.keyword,
             &args.source,
             reranked_list.len(),
-            &reranked_list.iter().map(|r| r.journal.clone()).collect::<Vec<_>>(),
+            &reranked_list
+                .iter()
+                .map(|r| r.journal.clone())
+                .collect::<Vec<_>>(),
         );
     }
 
@@ -420,19 +454,31 @@ fn passes_filters(item: &EnrichedResult, args: &SearchArgs) -> bool {
     }
 
     if let Some(ref pattern) = args.sci {
-        if !item.sci_partition.to_lowercase().contains(&pattern.to_lowercase()) {
+        if !item
+            .sci_partition
+            .to_lowercase()
+            .contains(&pattern.to_lowercase())
+        {
             return false;
         }
     }
 
     if let Some(ref pattern) = args.sci_up_top {
-        if !item.sci_up_top.to_lowercase().contains(&pattern.to_lowercase()) {
+        if !item
+            .sci_up_top
+            .to_lowercase()
+            .contains(&pattern.to_lowercase())
+        {
             return false;
         }
     }
 
     if let Some(ref pattern) = args.sci_base {
-        if !item.sci_base.to_lowercase().contains(&pattern.to_lowercase()) {
+        if !item
+            .sci_base
+            .to_lowercase()
+            .contains(&pattern.to_lowercase())
+        {
             return false;
         }
     }
@@ -549,7 +595,7 @@ fn save_csv<T: Serialize>(
 fn log_search_analytics(keyword: &str, source: &str, result_count: usize, journals: &[String]) {
     // Initialize DB (best effort, don't fail pipeline if DB unavailable)
     let db_config = db::DbConfig::default();
-    
+
     match db::init_pool(&db_config) {
         Ok(pool) => {
             // Get sync connection for logging
@@ -560,14 +606,11 @@ fn log_search_analytics(keyword: &str, source: &str, result_count: usize, journa
                     return;
                 }
             };
-            
+
             // Filter non-empty journals
-            let unique_journals: Vec<String> = journals
-                .iter()
-                .filter(|j| !j.is_empty())
-                .cloned()
-                .collect();
-            
+            let unique_journals: Vec<String> =
+                journals.iter().filter(|j| !j.is_empty()).cloned().collect();
+
             match db::analytics::log_search(
                 &conn,
                 None, // No API key in CLI mode
@@ -583,7 +626,7 @@ fn log_search_analytics(keyword: &str, source: &str, result_count: usize, journa
                     eprintln!("Warning: Failed to log analytics: {}", e);
                 }
             }
-            
+
             // Drop pool to ensure clean shutdown
             drop(pool);
         }

@@ -357,12 +357,14 @@ pub async fn pipeline_handler(
     );
 
     // Spawn background execution with database for caching/analytics
+    let llm_filter = state.current_llm_filter().await;
+
     super::pipeline::spawn_pipeline(
         state.task_store.clone(),
         task_id.clone(),
         config,
         Some(state.db.clone()),
-        state.llm_filter.clone(),
+        llm_filter,
         state.ranking_service.clone(),
     );
 

@@ -2,14 +2,14 @@
 //!
 //! Provides API Key validation and Role-Based Access Control (RBAC).
 
+use crate::db::api_keys;
+use crate::server::state::AppState;
 use axum::{
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
 };
-use crate::server::state::AppState;
-use crate::db::api_keys;
 use tracing::{debug, warn};
 
 /// Middleware to enforce Admin-only access
@@ -35,7 +35,7 @@ pub async fn require_admin(
 
     // 2. Database Validation
     let pool = &state.db;
-    
+
     // Get connection
     let conn = pool.get().await.map_err(|e| {
         warn!("DB Pool error: {}", e);
@@ -44,10 +44,10 @@ pub async fn require_admin(
 
     // Run blocking validation logic
     let key_str_clone = key_str.clone();
-    let validation_result = conn.interact(move |c| {
-        api_keys::validate(c, &key_str_clone)
-    }).await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?; // Join error
+    let validation_result = conn
+        .interact(move |c| api_keys::validate(c, &key_str_clone))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?; // Join error
 
     // Check application error
     let key_opt = validation_result.map_err(|e| {

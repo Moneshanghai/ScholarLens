@@ -1513,7 +1513,7 @@ body {
 
 #app,
 .footer {
-  margin-left: 240px;
+  margin-left: 0;
 }
 
 .container {
@@ -1601,7 +1601,7 @@ body {
   background: linear-gradient(180deg, var(--sidebar-bg-2) 0%, var(--sidebar-bg) 100%);
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: none;
-  transform: translateX(0);
+  transform: translateX(-100%);
 }
 
 .sidebar-header {
@@ -1621,7 +1621,7 @@ body {
 }
 
 .sidebar-close {
-  display: none;
+  display: flex;
   color: rgba(255, 255, 255, 0.7);
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1694,7 +1694,7 @@ body {
 }
 
 .sidebar-overlay {
-  display: none;
+  display: block;
 }
 
 .hero {
@@ -2448,4 +2448,106 @@ body {
   font-weight: 700;
   color: #0f766e;
   white-space: nowrap;
+}
+
+/* Settings Page */
+.settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 1.5rem;
+}
+
+.settings-form {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.settings-help {
+  margin-bottom: 0.75rem;
+  color: var(--text-muted, #64748b);
+  line-height: 1.7;
+}
+
+.settings-command {
+  margin: 0.75rem 0;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.form-input-readonly {
+  color: var(--text-muted, #64748b);
+  background: #f1f5f9;
+  cursor: not-allowed;
+}
+
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 2rem;
+  font-weight: 700;
+}
+
+.settings-message {
+  min-height: 1.5rem;
+  margin-bottom: 1rem;
+  color: var(--color-text-muted, #64748b);
+}
+
+.settings-message-error {
+  color: #b91c1c;
+}
+
+.provider-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.provider-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.provider-card h3 {
+  margin: 0 0 0.35rem;
+}
+
+.provider-card code {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.btn-danger {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+@media (max-width: 900px) {
+  .settings-grid,
+  .provider-card {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .provider-actions {
+    justify-content: flex-start;
+  }
 }

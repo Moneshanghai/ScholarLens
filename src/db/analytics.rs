@@ -22,7 +22,8 @@ pub fn log_search(
         "INSERT INTO search_logs (api_key_id, keyword, source, result_count, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![api_key_id, keyword, source, result_count, now],
-    ).map_err(|e| GscholarError::Database(format!("Log search failed: {}", e)))?;
+    )
+    .map_err(|e| GscholarError::Database(format!("Log search failed: {}", e)))?;
 
     let search_id = conn.last_insert_rowid();
 
@@ -32,7 +33,8 @@ pub fn log_search(
             conn.execute(
                 "INSERT INTO journal_hits (search_id, journal_name) VALUES (?1, ?2)",
                 params![search_id, journal],
-            ).ok();
+            )
+            .ok();
         }
     }
 
@@ -51,29 +53,33 @@ pub struct StatsOverview {
 }
 
 pub fn get_overview(conn: &Connection) -> Result<StatsOverview> {
-    let total_searches: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM search_logs",
-        [],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let total_searches: i64 = conn
+        .query_row("SELECT COUNT(*) FROM search_logs", [], |row| row.get(0))
+        .unwrap_or(0);
 
-    let total_papers: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(result_count), 0) FROM search_logs",
-        [],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let total_papers: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(result_count), 0) FROM search_logs",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
-    let unique_keywords: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT keyword) FROM search_logs",
-        [],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let unique_keywords: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT keyword) FROM search_logs",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
-    let unique_journals: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT journal_name) FROM journal_hits",
-        [],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let unique_journals: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT journal_name) FROM journal_hits",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     let avg_papers = if total_searches > 0 {
         total_papers as f64 / total_searches as f64
@@ -99,21 +105,25 @@ pub struct KeywordStats {
 }
 
 pub fn get_top_keywords(conn: &Connection, limit: u32) -> Result<Vec<KeywordStats>> {
-    let mut stmt = conn.prepare(
-        "SELECT keyword, COUNT(*) as cnt, AVG(result_count) as avg_res
+    let mut stmt = conn
+        .prepare(
+            "SELECT keyword, COUNT(*) as cnt, AVG(result_count) as avg_res
          FROM search_logs
          GROUP BY keyword
          ORDER BY cnt DESC
-         LIMIT ?1"
-    ).map_err(|e| GscholarError::Database(format!("Prepare failed: {}", e)))?;
+         LIMIT ?1",
+        )
+        .map_err(|e| GscholarError::Database(format!("Prepare failed: {}", e)))?;
 
-    let rows = stmt.query_map(params![limit], |row| {
-        Ok(KeywordStats {
-            keyword: row.get(0)?,
-            count: row.get(1)?,
-            avg_results: row.get(2)?,
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(KeywordStats {
+                keyword: row.get(0)?,
+                count: row.get(1)?,
+                avg_results: row.get(2)?,
+            })
         })
-    }).map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
+        .map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
 
     let stats: Vec<KeywordStats> = rows.filter_map(|r| r.ok()).collect();
     Ok(stats)
@@ -127,20 +137,24 @@ pub struct JournalStats {
 }
 
 pub fn get_top_journals(conn: &Connection, limit: u32) -> Result<Vec<JournalStats>> {
-    let mut stmt = conn.prepare(
-        "SELECT journal_name, COUNT(*) as cnt
+    let mut stmt = conn
+        .prepare(
+            "SELECT journal_name, COUNT(*) as cnt
          FROM journal_hits
          GROUP BY journal_name
          ORDER BY cnt DESC
-         LIMIT ?1"
-    ).map_err(|e| GscholarError::Database(format!("Prepare failed: {}", e)))?;
+         LIMIT ?1",
+        )
+        .map_err(|e| GscholarError::Database(format!("Prepare failed: {}", e)))?;
 
-    let rows = stmt.query_map(params![limit], |row| {
-        Ok(JournalStats {
-            journal_name: row.get(0)?,
-            count: row.get(1)?,
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(JournalStats {
+                journal_name: row.get(0)?,
+                count: row.get(1)?,
+            })
         })
-    }).map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
+        .map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
 
     let stats: Vec<JournalStats> = rows.filter_map(|r| r.ok()).collect();
     Ok(stats)
@@ -157,21 +171,25 @@ pub struct DailyStats {
 pub fn get_daily_stats(conn: &Connection, days: u32) -> Result<Vec<DailyStats>> {
     let cutoff = chrono::Utc::now().timestamp() - (days as i64 * 86400);
 
-    let mut stmt = conn.prepare(
-        "SELECT date(created_at, 'unixepoch') as day, COUNT(*), SUM(result_count)
+    let mut stmt = conn
+        .prepare(
+            "SELECT date(created_at, 'unixepoch') as day, COUNT(*), SUM(result_count)
          FROM search_logs
          WHERE created_at >= ?1
          GROUP BY day
-         ORDER BY day DESC"
-    ).map_err(|e| GscholarError::Database(format!("Prepare failed: {}", e)))?;
+         ORDER BY day DESC",
+        )
+        .map_err(|e| GscholarError::Database(format!("Prepare failed: {}", e)))?;
 
-    let rows = stmt.query_map(params![cutoff], |row| {
-        Ok(DailyStats {
-            date: row.get(0)?,
-            searches: row.get(1)?,
-            papers: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+    let rows = stmt
+        .query_map(params![cutoff], |row| {
+            Ok(DailyStats {
+                date: row.get(0)?,
+                searches: row.get(1)?,
+                papers: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            })
         })
-    }).map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
+        .map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
 
     let stats: Vec<DailyStats> = rows.filter_map(|r| r.ok()).collect();
     Ok(stats)
@@ -191,11 +209,11 @@ mod tests {
     #[test]
     fn test_log_search() {
         let conn = setup_db();
-        
+
         let journals = vec!["Nature".to_string(), "Science".to_string()];
-        let id = log_search(&conn, Some("key1"), "AI", Some("openalex"), 50, &journals)
-            .expect("log");
-        
+        let id =
+            log_search(&conn, Some("key1"), "AI", Some("openalex"), 50, &journals).expect("log");
+
         assert!(id > 0);
 
         let overview = get_overview(&conn).expect("overview");
@@ -206,7 +224,7 @@ mod tests {
     #[test]
     fn test_top_keywords() {
         let conn = setup_db();
-        
+
         log_search(&conn, None, "AI", None, 10, &[]).expect("log");
         log_search(&conn, None, "AI", None, 20, &[]).expect("log");
         log_search(&conn, None, "ML", None, 15, &[]).expect("log");
@@ -220,10 +238,10 @@ mod tests {
     #[test]
     fn test_top_journals() {
         let conn = setup_db();
-        
+
         let journals1 = vec!["Nature".to_string(), "Science".to_string()];
         let journals2 = vec!["Nature".to_string(), "Cell".to_string()];
-        
+
         log_search(&conn, None, "test1", None, 10, &journals1).expect("log");
         log_search(&conn, None, "test2", None, 10, &journals2).expect("log");
 

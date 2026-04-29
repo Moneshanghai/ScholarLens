@@ -11,10 +11,10 @@
 use crate::error::{GscholarError, Result};
 use crate::sources::rate_limiter;
 use crate::sources::retry::{next_rate_limit_delay, RateLimitRetryPolicy};
+use crate::traffic::GLOBAL_TRAFFIC;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use crate::traffic::GLOBAL_TRAFFIC;
 use tracing::{debug, info, warn};
 
 /// Semantic Scholar API base URL
@@ -29,12 +29,12 @@ pub struct SemanticScholarResult {
     pub title: String,
     pub doi: String,
     pub ss_abstract: String,
-    pub tldr: String,          // AI-generated one-sentence summary
+    pub tldr: String, // AI-generated one-sentence summary
     pub ss_url: String,
     pub is_oa: bool,
     pub oa_pdf_url: String,
-    pub paper_id: String,      // Semantic Scholar paper ID
-    pub embedding: String,     // Specter v2 embedding (comma-separated floats)
+    pub paper_id: String,  // Semantic Scholar paper ID
+    pub embedding: String, // Specter v2 embedding (comma-separated floats)
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,23 +86,27 @@ struct SSExternalIds {
 /// # Returns
 ///
 /// List of results for papers found
-pub async fn batch_lookup(dois: &[String], api_key: Option<&str>) -> Result<Vec<SemanticScholarResult>> {
+pub async fn batch_lookup(
+    dois: &[String],
+    api_key: Option<&str>,
+) -> Result<Vec<SemanticScholarResult>> {
     if dois.is_empty() {
         return Ok(Vec::new());
     }
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()?;
+    let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
 
     // Filter out empty DOIs
     let valid_dois: Vec<&String> = dois.iter().filter(|d| !d.is_empty()).collect();
-    
+
     if valid_dois.is_empty() {
         return Ok(Vec::new());
     }
 
-    info!(total = valid_dois.len(), "Starting Semantic Scholar batch lookup");
+    info!(
+        total = valid_dois.len(),
+        "Starting Semantic Scholar batch lookup"
+    );
 
     // Calculate optimal chunk size
     let total = valid_dois.len();
@@ -377,9 +381,7 @@ pub async fn search_papers(
     limit: usize,
     api_key: Option<&str>,
 ) -> Result<Vec<SSSearchPaper>> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()?;
+    let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
 
     let fields = "title,authors,venue,year,citationCount,externalIds,abstract,url,openAccessPdf";
     let publication_types = "Review,JournalArticle";
@@ -456,7 +458,10 @@ pub async fn search_papers(
                 warn!("SS Server error ({}) after 5 retries, giving up", status);
                 break resp;
             }
-            warn!("SS Server error ({}), waiting 2s before retry ({}/5)...", status, server_error_retries);
+            warn!(
+                "SS Server error ({}), waiting 2s before retry ({}/5)...",
+                status, server_error_retries
+            );
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         }
@@ -475,14 +480,13 @@ pub async fn search_papers(
 
     // Measure traffic
     let text = response.text().await?;
-    
+
     // Estimate traffic (URL + headers overhead vs body)
     GLOBAL_TRAFFIC.add_sent(url.len() as u64 + 500); // 500 bytes est for headers
     GLOBAL_TRAFFIC.add_received(text.len() as u64);
 
-    let resp: SSRelevanceSearchResponse = serde_json::from_str(&text).map_err(|e| {
-        GscholarError::Parse(format!("Failed to parse SS search response: {}", e))
-    })?;
+    let resp: SSRelevanceSearchResponse = serde_json::from_str(&text)
+        .map_err(|e| GscholarError::Parse(format!("Failed to parse SS search response: {}", e)))?;
 
     let mut results = Vec::new();
     if let Some(data) = resp.data {
@@ -512,7 +516,10 @@ pub async fn search_papers(
                 doi,
                 ss_abstract: paper.abstract_text.unwrap_or_default(),
                 url: paper.url.unwrap_or_default(),
-                pdf_url: paper.open_access_pdf.and_then(|p| p.url).unwrap_or_default(),
+                pdf_url: paper
+                    .open_access_pdf
+                    .and_then(|p| p.url)
+                    .unwrap_or_default(),
             };
 
             results.push(result);
@@ -542,14 +549,17 @@ mod tests {
         let total = 1200;
         let batch_count = (total + MAX_BATCH_SIZE - 1) / MAX_BATCH_SIZE;
         assert_eq!(batch_count, 3); // ceil(1200/500) = 3
-        
+
         let chunk_size = (total + batch_count - 1) / batch_count;
         assert_eq!(chunk_size, 400); // ceil(1200/3) = 400
     }
 
     #[test]
     fn test_api_key_header_is_only_added_when_configured() {
-        assert_eq!(semantic_scholar_api_key_header(Some("ss-key")), Some("ss-key"));
+        assert_eq!(
+            semantic_scholar_api_key_header(Some("ss-key")),
+            Some("ss-key")
+        );
         assert_eq!(semantic_scholar_api_key_header(Some("   ")), None);
         assert_eq!(semantic_scholar_api_key_header(None), None);
     }

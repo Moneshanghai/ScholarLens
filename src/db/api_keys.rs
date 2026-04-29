@@ -84,8 +84,8 @@ pub fn generate_key() -> (SecretString, String) {
 /// 2. Protects against rainbow table attacks
 pub fn hash_key(key: &str) -> String {
     let pepper = get_pepper();
-    let mut mac = HmacSha256::new_from_slice(pepper.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(pepper.as_bytes()).expect("HMAC can take key of any size");
     mac.update(key.as_bytes());
     let result = mac.finalize();
     hex::encode(result.into_bytes())
@@ -99,14 +99,26 @@ pub fn verify_key_hash(plaintext_key: &str, stored_hash: &str) -> bool {
     let computed_hash = hash_key(plaintext_key);
     let computed_bytes = computed_hash.as_bytes();
     let stored_bytes = stored_hash.as_bytes();
-    
+
     // Constant-time comparison - takes same time regardless of where mismatch occurs
     computed_bytes.ct_eq(stored_bytes).into()
 }
 
 /// Create a new API key
-pub fn create(conn: &Connection, name: &str, is_admin: bool, rate_limit_rps: u32) -> Result<ApiKeyCreated> {
-    let id = format!("key_{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or(""));
+pub fn create(
+    conn: &Connection,
+    name: &str,
+    is_admin: bool,
+    rate_limit_rps: u32,
+) -> Result<ApiKeyCreated> {
+    let id = format!(
+        "key_{}",
+        uuid::Uuid::new_v4()
+            .to_string()
+            .split('-')
+            .next()
+            .unwrap_or("")
+    );
     let (key, key_hash) = generate_key();
     let now = chrono::Utc::now().timestamp();
 
@@ -206,7 +218,8 @@ pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<ApiKey>> {
 pub fn list(conn: &Connection, page: u32, limit: u32) -> Result<(Vec<ApiKey>, i64)> {
     let offset = (page.saturating_sub(1)) * limit;
 
-    let total: i64 = conn.query_row("SELECT COUNT(*) FROM api_keys", [], |row| row.get(0))
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM api_keys", [], |row| row.get(0))
         .unwrap_or(0);
 
     let mut stmt = conn.prepare(
@@ -214,25 +227,32 @@ pub fn list(conn: &Connection, page: u32, limit: u32) -> Result<(Vec<ApiKey>, i6
          FROM api_keys ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
     ).map_err(|e| GscholarError::Database(format!("Prepare failed: {}", e)))?;
 
-    let rows = stmt.query_map(params![limit, offset], |row| {
-        Ok(ApiKey {
-            id: row.get(0)?,
-            key_hash: row.get(1)?,
-            name: row.get(2)?,
-            is_admin: row.get::<_, i32>(3)? != 0,
-            rate_limit_rps: row.get::<_, i32>(4)? as u32,
-            request_count: row.get(5)?,
-            last_used_at: row.get(6)?,
-            created_at: row.get(7)?,
+    let rows = stmt
+        .query_map(params![limit, offset], |row| {
+            Ok(ApiKey {
+                id: row.get(0)?,
+                key_hash: row.get(1)?,
+                name: row.get(2)?,
+                is_admin: row.get::<_, i32>(3)? != 0,
+                rate_limit_rps: row.get::<_, i32>(4)? as u32,
+                request_count: row.get(5)?,
+                last_used_at: row.get(6)?,
+                created_at: row.get(7)?,
+            })
         })
-    }).map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
+        .map_err(|e| GscholarError::Database(format!("Query failed: {}", e)))?;
 
     let keys: Vec<ApiKey> = rows.filter_map(|r| r.ok()).collect();
     Ok((keys, total))
 }
 
 /// Update key settings
-pub fn update(conn: &Connection, id: &str, name: Option<&str>, rate_limit_rps: Option<u32>) -> Result<bool> {
+pub fn update(
+    conn: &Connection,
+    id: &str,
+    name: Option<&str>,
+    rate_limit_rps: Option<u32>,
+) -> Result<bool> {
     let mut updates = Vec::new();
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -250,13 +270,11 @@ pub fn update(conn: &Connection, id: &str, name: Option<&str>, rate_limit_rps: O
     }
 
     values.push(Box::new(id.to_string()));
-    let sql = format!(
-        "UPDATE api_keys SET {} WHERE id = ?",
-        updates.join(", ")
-    );
+    let sql = format!("UPDATE api_keys SET {} WHERE id = ?", updates.join(", "));
 
     let params: Vec<&dyn rusqlite::ToSql> = values.iter().map(|v| v.as_ref()).collect();
-    let rows = conn.execute(&sql, params.as_slice())
+    let rows = conn
+        .execute(&sql, params.as_slice())
         .map_err(|e| GscholarError::Database(format!("Update failed: {}", e)))?;
 
     Ok(rows > 0)
@@ -264,19 +282,22 @@ pub fn update(conn: &Connection, id: &str, name: Option<&str>, rate_limit_rps: O
 
 /// Delete a key
 pub fn delete(conn: &Connection, id: &str) -> Result<bool> {
-    let rows = conn.execute("DELETE FROM api_keys WHERE id = ?1", params![id])
+    let rows = conn
+        .execute("DELETE FROM api_keys WHERE id = ?1", params![id])
         .map_err(|e| GscholarError::Database(format!("Delete failed: {}", e)))?;
-    
+
     Ok(rows > 0)
 }
 
 /// Check if any admin key exists
 pub fn has_admin_key(conn: &Connection) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM api_keys WHERE is_admin = 1",
-        [],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM api_keys WHERE is_admin = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     Ok(count > 0)
 }
@@ -295,7 +316,7 @@ mod tests {
     #[test]
     fn test_create_and_validate() {
         let conn = setup_db();
-        
+
         let created = create(&conn, "Test Key", false, 10).expect("create");
         assert!(created.key.expose_secret().starts_with("rgs_"));
 
@@ -309,7 +330,7 @@ mod tests {
     #[test]
     fn test_invalid_key() {
         let conn = setup_db();
-        
+
         let validated = validate(&conn, "invalid-key").expect("validate");
         assert!(validated.is_none());
     }
@@ -317,10 +338,10 @@ mod tests {
     #[test]
     fn test_constant_time_verify() {
         let (key, hash) = generate_key();
-        
+
         // Correct key should verify
         assert!(verify_key_hash(key.expose_secret(), &hash));
-        
+
         // Wrong key should not verify
         assert!(!verify_key_hash("wrong-key", &hash));
     }
@@ -328,10 +349,10 @@ mod tests {
     #[test]
     fn test_record_usage() {
         let conn = setup_db();
-        
+
         let created = create(&conn, "Test", false, 10).expect("create");
         let hash = hash_key(created.key.expose_secret());
-        
+
         record_usage(&conn, &hash).expect("record");
         record_usage(&conn, &hash).expect("record");
 
@@ -342,7 +363,7 @@ mod tests {
     #[test]
     fn test_list_keys() {
         let conn = setup_db();
-        
+
         create(&conn, "Key 1", false, 10).expect("create");
         create(&conn, "Key 2", true, 20).expect("create");
 
@@ -354,13 +375,13 @@ mod tests {
     #[test]
     fn test_has_admin_key() {
         let conn = setup_db();
-        
+
         assert!(!has_admin_key(&conn).expect("check"));
-        
+
         create(&conn, "Admin", true, 100).expect("create");
         assert!(has_admin_key(&conn).expect("check"));
     }
-    
+
     #[test]
     fn test_key_not_logged() {
         let created = ApiKeyCreated {
@@ -371,7 +392,7 @@ mod tests {
             rate_limit_rps: 10,
             created_at: 0,
         };
-        
+
         let debug_output = format!("{:?}", created);
         assert!(debug_output.contains("[REDACTED]"));
         assert!(!debug_output.contains("secret-key"));

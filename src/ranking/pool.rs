@@ -78,7 +78,10 @@ impl RankingClientPool {
         Self::from_api_keys_with_policy(keys, KeyHealthPolicy::default())
     }
 
-    pub fn from_api_keys_with_policy(keys: &[String], health_policy: KeyHealthPolicy) -> Result<Self> {
+    pub fn from_api_keys_with_policy(
+        keys: &[String],
+        health_policy: KeyHealthPolicy,
+    ) -> Result<Self> {
         if keys.is_empty() {
             return Err(GscholarError::Config("No API keys provided".to_string()));
         }
@@ -105,22 +108,25 @@ impl RankingClientPool {
     pub async fn active_key_count(&self) -> usize {
         let mut states = self.key_states.lock().await;
         self.refresh_states(&mut states);
-        states.iter().filter(|s| s.state == KeyState::Active).count()
+        states
+            .iter()
+            .filter(|s| s.state == KeyState::Active)
+            .count()
     }
 
     pub async fn get_rank(&self, venue_name: &str) -> Option<RankingMetrics> {
         let indices = self.pick_key_indices(1).await;
-        let idx = indices
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.next_index.fetch_add(1, Ordering::Relaxed) % self.clients.len());
+        let idx = indices.first().copied().unwrap_or_else(|| {
+            self.next_index.fetch_add(1, Ordering::Relaxed) % self.clients.len()
+        });
         let (result, ok) = self.clients[idx].get_rank_with_status(venue_name).await;
         self.on_key_result(idx, ok).await;
         result
     }
 
     pub async fn batch_lookup(&self, venues: &[String]) -> Vec<Option<RankingMetrics>> {
-        self.batch_lookup_with_chunk(venues, self.clients.len()).await
+        self.batch_lookup_with_chunk(venues, self.clients.len())
+            .await
     }
 
     /// Batch lookup using at most `chunk_size` clients from the pool.
@@ -208,7 +214,11 @@ impl RankingClientPool {
             all_results.into_iter().map(|(_, result)| result).collect();
 
         let matched = final_results.iter().filter(|r| r.is_some()).count();
-        info!(total = total, matched = matched, "Parallel batch lookup complete");
+        info!(
+            total = total,
+            matched = matched,
+            "Parallel batch lookup complete"
+        );
         final_results
     }
 
@@ -257,7 +267,9 @@ impl RankingClientPool {
                 }
                 KeyState::Dead => {
                     if let Some(dead_since) = state.dead_since {
-                        if now.duration_since(dead_since).as_secs() >= self.health_policy.stale_ttl_secs {
+                        if now.duration_since(dead_since).as_secs()
+                            >= self.health_policy.stale_ttl_secs
+                        {
                             state.state = KeyState::Active;
                             state.dead_since = None;
                             state.consecutive_failures = 0;
@@ -298,7 +310,11 @@ impl RankingClientPool {
                 }
             }
         } else {
-            cache_misses = venues.iter().enumerate().map(|(i, v)| (i, v.clone())).collect();
+            cache_misses = venues
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (i, v.clone()))
+                .collect();
         }
 
         let cache_hits = total - cache_misses.len();

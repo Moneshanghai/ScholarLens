@@ -292,7 +292,9 @@ impl Scheduler {
             return None;
         }
 
-        let (cached_rankings, uncached_venues) = self.lookup_cache(&job.request.task_id, &unique_venues).await;
+        let (cached_rankings, uncached_venues) = self
+            .lookup_cache(&job.request.task_id, &unique_venues)
+            .await;
         let cache_misses = uncached_venues.len();
 
         if cache_misses == 0 {
@@ -346,7 +348,10 @@ impl Scheduler {
             }
 
             let active_keys = self.pool.active_key_count().await;
-            let leased_keys = running_leases.values().map(|l| l.granted_keys).sum::<usize>();
+            let leased_keys = running_leases
+                .values()
+                .map(|l| l.granted_keys)
+                .sum::<usize>();
             let available_keys = active_keys.saturating_sub(leased_keys);
 
             if available_keys == 0 {
@@ -414,7 +419,9 @@ impl Scheduler {
                     self.options.eta_scale,
                 );
                 let can_backfill = match reservation {
-                    Some(t_reserve) => Instant::now() + Duration::from_secs(candidate_eta) <= t_reserve,
+                    Some(t_reserve) => {
+                        Instant::now() + Duration::from_secs(candidate_eta) <= t_reserve
+                    }
                     None => true,
                 };
                 if can_backfill {
@@ -465,7 +472,8 @@ impl Scheduler {
             _ => job.requested_chunk.min(available_keys).max(1),
         };
 
-        let runtime_secs = estimate_runtime_secs(job.cache_miss_count, granted_keys, self.options.eta_scale);
+        let runtime_secs =
+            estimate_runtime_secs(job.cache_miss_count, granted_keys, self.options.eta_scale);
         let timeout_secs = std::cmp::max(self.options.job_timeout_min_sec, runtime_secs);
         let lease_id = *next_lease_id;
         *next_lease_id += 1;
@@ -501,7 +509,12 @@ impl Scheduler {
         tokio::spawn(async move {
             let timeout = Duration::from_secs(timeout_secs);
             let mut timed_out = false;
-            let result = match tokio::time::timeout(timeout, process_prepared_job(db, pool, granted_keys, &job)).await {
+            let result = match tokio::time::timeout(
+                timeout,
+                process_prepared_job(db, pool, granted_keys, &job),
+            )
+            .await
+            {
                 Ok(result) => result,
                 Err(_) => {
                     timed_out = true;

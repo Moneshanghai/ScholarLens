@@ -39,6 +39,22 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 
+-- Web-configurable LLM providers.
+CREATE TABLE IF NOT EXISTS llm_providers (
+    name TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    interface_type TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    model TEXT NOT NULL,
+    api_key TEXT NOT NULL DEFAULT '',
+    provider_order INTEGER NOT NULL DEFAULT 100,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_providers_enabled_order
+    ON llm_providers(enabled, provider_order);
+
 -- Journal cache table
 CREATE TABLE IF NOT EXISTS journal_cache (
     name TEXT PRIMARY KEY,
@@ -89,18 +105,19 @@ INSERT OR IGNORE INTO cache_stats (id, total_lookups, cache_hits) VALUES (1, 0, 
 /// Also enables WAL mode for better concurrent read/write performance.
 pub fn init_tables(conn: &Connection) -> Result<()> {
     debug!("Initializing database schema");
-    
+
     // Enable WAL mode for better concurrent read/write performance
     // Set busy_timeout to prevent SQLITE_BUSY errors under load
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
          PRAGMA busy_timeout=5000;
-         PRAGMA synchronous=NORMAL;"
-    ).map_err(|e| GscholarError::Database(format!("Failed to set pragmas: {}", e)))?;
-    
+         PRAGMA synchronous=NORMAL;",
+    )
+    .map_err(|e| GscholarError::Database(format!("Failed to set pragmas: {}", e)))?;
+
     conn.execute_batch(SCHEMA_SQL)
         .map_err(|e| GscholarError::Database(format!("Failed to init schema: {}", e)))?;
-    
+
     debug!("Database schema initialized with WAL mode");
     Ok(())
 }
@@ -110,15 +127,19 @@ pub fn get_db_stats(conn: &Connection) -> Result<DbStats> {
     let task_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
         .unwrap_or(0);
-    
+
     let key_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM api_keys", [], |row| row.get(0))
         .unwrap_or(0);
-    
+
     let cache_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM journal_cache", [], |row| row.get(0))
         .unwrap_or(0);
-    
+
+    let llm_provider_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM llm_providers", [], |row| row.get(0))
+        .unwrap_or(0);
+
     let search_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM search_logs", [], |row| row.get(0))
         .unwrap_or(0);
@@ -126,6 +147,7 @@ pub fn get_db_stats(conn: &Connection) -> Result<DbStats> {
     Ok(DbStats {
         task_count,
         key_count,
+        llm_provider_count,
         cache_count,
         search_count,
     })
@@ -136,6 +158,7 @@ pub fn get_db_stats(conn: &Connection) -> Result<DbStats> {
 pub struct DbStats {
     pub task_count: i64,
     pub key_count: i64,
+    pub llm_provider_count: i64,
     pub cache_count: i64,
     pub search_count: i64,
 }
@@ -148,7 +171,7 @@ mod tests {
     fn test_init_tables() {
         let conn = Connection::open_in_memory().expect("in-memory db");
         assert!(init_tables(&conn).is_ok());
-        
+
         // Verify tables exist
         let count: i64 = conn
             .query_row(
@@ -157,7 +180,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("query");
-        
+
         assert!(count >= 5); // At least 5 tables
     }
 
@@ -165,7 +188,7 @@ mod tests {
     fn test_get_db_stats() {
         let conn = Connection::open_in_memory().expect("in-memory db");
         init_tables(&conn).expect("init");
-        
+
         let stats = get_db_stats(&conn).expect("stats");
         assert_eq!(stats.task_count, 0);
         assert_eq!(stats.key_count, 0);

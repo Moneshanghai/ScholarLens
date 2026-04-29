@@ -345,7 +345,10 @@ async fn call_efetch(
             }
             return Err(crate::error::GscholarError::Api {
                 code: 429,
-                message: format!("PubMed efetch rate limited after {} retries", policy.max_retries),
+                message: format!(
+                    "PubMed efetch rate limited after {} retries",
+                    policy.max_retries
+                ),
             });
         }
 

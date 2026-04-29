@@ -35,6 +35,74 @@ use merge::merge_search_results;
 use relevance::SortBy;
 use search_stage::{build_openalex_or_query, run_parallel_search};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchQueryPlan {
+    pub original_keyword: String,
+    pub translated_keyword: String,
+    pub expanded_terms: Vec<String>,
+    pub is_cjk_query: bool,
+}
+
+impl SearchQueryPlan {
+    pub fn new(
+        original_keyword: impl Into<String>,
+        translated_keyword: impl Into<String>,
+        expanded_terms: Vec<String>,
+    ) -> Self {
+        let original_keyword = original_keyword.into();
+        let translated_keyword = translated_keyword.into();
+        let mut seen = std::collections::HashSet::new();
+        let expanded_terms = expanded_terms
+            .into_iter()
+            .map(|term| term.trim().to_string())
+            .filter(|term| !term.is_empty())
+            .filter(|term| seen.insert(term.to_lowercase()))
+            .collect();
+        let is_cjk_query = contains_cjk(&original_keyword);
+        Self {
+            original_keyword,
+            translated_keyword,
+            expanded_terms,
+            is_cjk_query,
+        }
+    }
+
+    pub fn primary_keyword(&self) -> &str {
+        if self.translated_keyword.trim().is_empty() {
+            &self.original_keyword
+        } else {
+            &self.translated_keyword
+        }
+    }
+
+    pub fn fallback_keywords(&self) -> Vec<String> {
+        if self.is_cjk_query
+            && !self
+                .original_keyword
+                .eq_ignore_ascii_case(self.primary_keyword())
+        {
+            vec![self.original_keyword.clone()]
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn openalex_terms(&self) -> Vec<String> {
+        std::iter::once(self.primary_keyword().to_string())
+            .chain(self.expanded_terms.clone())
+            .collect()
+    }
+}
+
+fn contains_cjk(value: &str) -> bool {
+    value.chars().any(|ch| {
+        ('\u{4E00}'..='\u{9FFF}').contains(&ch)
+            || ('\u{3400}'..='\u{4DBF}').contains(&ch)
+            || ('\u{3040}'..='\u{30FF}').contains(&ch)
+            || ('\u{AC00}'..='\u{D7AF}').contains(&ch)
+    })
+}
+
 /// Pipeline request from API
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PipelineRequest {
@@ -99,6 +167,7 @@ pub struct PipelineConfig {
     pub sci: Option<String>,
 
     pub llm_strict_filter: bool,
+    pub enable_llm_relevance: bool,
     sort_by: SortBy,
     /// User's description for keyword expansion and relevance filtering
     pub content_help: Option<String>,
@@ -172,6 +241,7 @@ impl PipelineConfig {
             sci: req.sci,
 
             llm_strict_filter: req.llm_strict_filter.unwrap_or(server_llm_strict_filter),
+            enable_llm_relevance: _server_llm_enabled,
             sort_by,
             content_help: req.content_help,
             output_dir,
@@ -558,20 +628,32 @@ async fn execute_pipeline(
     // Stage 0.5: Keyword Expansion (based on translated English keyword)
     let expanded_keywords =
         run_keyword_expansion(tracker, &config, llm_filter.as_ref(), &search_keyword).await;
+    let query_plan = SearchQueryPlan::new(&config.keyword, &search_keyword, expanded_keywords);
+    info!(
+        task_id = %task_id,
+        is_cjk_query = query_plan.is_cjk_query,
+        primary_keyword = %query_plan.primary_keyword(),
+        fallback_keywords = ?query_plan.fallback_keywords(),
+        expanded_terms = ?query_plan.expanded_terms,
+        "Search query plan prepared"
+    );
 
     // Stage 1: Search enabled sources in parallel.
     tracker.update("Searching papers", 10).await;
 
     // Build OpenAlex OR query from original + expanded terms.
-    let oa_query = build_openalex_or_query(&search_keyword, expanded_keywords);
+    let oa_query = build_openalex_or_query(
+        query_plan.primary_keyword(),
+        query_plan.expanded_terms.clone(),
+    );
 
     // Parallel search
-    let keyword = search_keyword.clone();
+    let keyword = query_plan.primary_keyword().to_string();
     let ylo = config.ylo;
     let ss_limit = config.ss_limit;
     let oa_limit = config.oa_limit;
 
-    let stage_result = run_parallel_search(
+    let mut stage_result = run_parallel_search(
         &task_id,
         &keyword,
         &oa_query,
@@ -585,6 +667,51 @@ async fn execute_pipeline(
         &config.xrxiv,
     )
     .await;
+
+    for fallback_keyword in query_plan.fallback_keywords() {
+        let fallback_sources: Vec<String> = config
+            .enabled_sources
+            .iter()
+            .filter(|source| source.as_str() != "openalex")
+            .cloned()
+            .collect();
+        if fallback_sources.is_empty() {
+            continue;
+        }
+
+        info!(
+            task_id = %task_id,
+            fallback_keyword = %fallback_keyword,
+            fallback_sources = ?fallback_sources,
+            "Running CJK fallback search"
+        );
+        let fallback_stage = run_parallel_search(
+            &task_id,
+            &fallback_keyword,
+            &fallback_keyword,
+            ylo,
+            ss_limit.min(30),
+            0,
+            &fallback_sources,
+            &config.semanticscholar,
+            &config.arxiv,
+            &config.pubmed,
+            &config.xrxiv,
+        )
+        .await;
+
+        stage_result.ss_results.extend(fallback_stage.ss_results);
+        stage_result.oa_results.extend(fallback_stage.oa_results);
+        stage_result
+            .additional_results
+            .extend(fallback_stage.additional_results);
+        stage_result
+            .failed_sources
+            .extend(fallback_stage.failed_sources);
+        stage_result
+            .source_counts
+            .extend(fallback_stage.source_counts);
+    }
 
     // Merge default sources first (SS + OpenAlex), then append additional source papers if any.
     let mut search_results = merge_search_results(stage_result.ss_results, stage_result.oa_results);
@@ -815,12 +942,19 @@ async fn execute_pipeline(
         .as_deref()
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
-    let llm_filter_applied = llm_filter.is_some() && has_content_help;
+    let llm_filter_applied =
+        config.enable_llm_relevance && llm_filter.is_some() && has_content_help;
     if !has_content_help {
         info!(
             task_id = %task_id,
             papers = final_results.len(),
             "Skipping LLM relevance filtering because content_help is empty"
+        );
+    } else if !config.enable_llm_relevance {
+        info!(
+            task_id = %task_id,
+            papers = final_results.len(),
+            "Skipping LLM relevance filtering because config disabled it"
         );
     } else {
         final_results = apply_llm_relevance_filter(
@@ -851,7 +985,11 @@ async fn execute_pipeline(
         &keyword,
         config.content_help.as_deref(),
         config.sort_by,
-        llm_filter.as_ref(),
+        if config.enable_llm_relevance {
+            llm_filter.as_ref()
+        } else {
+            None
+        },
         &mut results_to_save,
     )
     .await;
@@ -1008,6 +1146,25 @@ struct PaperResult {
     /// Internal: tracks which search source provided this paper (not serialized to JSON)
     #[serde(skip)]
     source: String,
+}
+
+#[doc(hidden)]
+pub mod test_support {
+    pub use super::relevance::LocalRelevanceScore;
+
+    pub fn local_relevance_score_for_test(
+        keyword: &str,
+        content_help: Option<&str>,
+        title: &str,
+        abstract_text: &str,
+    ) -> LocalRelevanceScore {
+        let paper = super::PaperResult {
+            title: title.to_string(),
+            abstract_text: abstract_text.to_string(),
+            ..Default::default()
+        };
+        super::relevance::local_relevance_score(keyword, content_help, &paper)
+    }
 }
 
 fn append_additional_results_dedup(base: &mut Vec<PaperResult>, additional: Vec<PaperResult>) {

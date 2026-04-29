@@ -118,7 +118,10 @@ impl CrossrefClient {
             .query(&[
                 ("query.title", title),
                 ("rows", "1"),
-                ("select", "DOI,title,author,container-title,published,abstract"),
+                (
+                    "select",
+                    "DOI,title,author,container-title,published,abstract",
+                ),
                 ("mailto", MAILTO),
             ])
             .send()

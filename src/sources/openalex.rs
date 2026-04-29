@@ -13,8 +13,8 @@ use crate::sources::rate_limiter;
 use chrono::Datelike;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
 use std::time::Duration;
+use tracing::{debug, info, warn};
 
 /// OpenAlex API base URL
 const OPENALEX_API_BASE: &str = "https://api.openalex.org";
@@ -31,27 +31,27 @@ pub struct OpenAlexResult {
     pub title: String,
     pub author: String,
     pub year: String,
-    pub publication_date: String,  // ISO 8601 date
-    pub venue: String,             // Journal/source name
-    pub source_type: String,       // journal, repository, etc.
+    pub publication_date: String, // ISO 8601 date
+    pub venue: String,            // Journal/source name
+    pub source_type: String,      // journal, repository, etc.
     pub doi: String,
-    pub article_url: String,       // Landing page URL
-    pub pdf_url: String,           // Direct PDF URL (if available)
-    pub citations: String,         // Cited by count
-    pub snippet: String,           // Abstract excerpt
-    pub openalex_id: String,       // OpenAlex work ID
+    pub article_url: String, // Landing page URL
+    pub pdf_url: String,     // Direct PDF URL (if available)
+    pub citations: String,   // Cited by count
+    pub snippet: String,     // Abstract excerpt
+    pub openalex_id: String, // OpenAlex work ID
     // Open Access info
     pub is_oa: bool,
-    pub oa_status: String,         // gold, green, hybrid, bronze, closed
-    pub oa_url: String,            // Best OA URL
+    pub oa_status: String, // gold, green, hybrid, bronze, closed
+    pub oa_url: String,    // Best OA URL
     // Additional metadata
-    pub language: String,          // ISO 639-1 language code
-    pub work_type: String,         // article, book, etc.
-    pub keywords: String,          // Comma-separated keywords
-    pub primary_topic: String,     // Primary research topic
+    pub language: String,      // ISO 639-1 language code
+    pub work_type: String,     // article, book, etc.
+    pub keywords: String,      // Comma-separated keywords
+    pub primary_topic: String, // Primary research topic
     // Reference info (full lists as comma-separated OpenAlex IDs)
-    pub referenced_works: String,  // Works this paper cites
-    pub related_works: String,     // Algorithmically related works
+    pub referenced_works: String, // Works this paper cites
+    pub related_works: String,    // Algorithmically related works
     pub referenced_works_count: i64,
     pub related_works_count: i64,
     // All locations count
@@ -190,7 +190,7 @@ struct OpenAlexTopic {
 /// List of search results
 pub async fn query(search_query: &str, options: &QueryOptions) -> Result<Vec<OpenAlexResult>> {
     use futures::stream::{self, StreamExt};
-    
+
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("rscholar/1.0 (mailto:c76d@c.com)")
@@ -209,7 +209,8 @@ pub async fn query(search_query: &str, options: &QueryOptions) -> Result<Vec<Ope
     let pages_to_fetch = vec![target_page];
 
     // Build URLs for the single target page
-    let urls: Vec<(i32, String)> = pages_to_fetch.iter()
+    let urls: Vec<(i32, String)> = pages_to_fetch
+        .iter()
         .filter_map(|page| {
             build_search_url(search_query, *page, options)
                 .ok()
@@ -219,33 +220,34 @@ pub async fn query(search_query: &str, options: &QueryOptions) -> Result<Vec<Ope
 
     // Concurrent fetching with 5 parallel requests (polite pool allows 10/s)
     let concurrent_limit = 5;
-    
-    let results: Vec<(i32, std::result::Result<Vec<OpenAlexResult>, GscholarError>)> = stream::iter(urls)
-        .map(|(page, url)| {
-            let client = client.clone();
-            async move {
-                debug!(url = %url, page = page, "Fetching OpenAlex page");
-                match fetch_page(&client, &url).await {
-                    Ok(response) => {
-                        let works = parse_response(&response);
-                        (page, works)
-                    }
-                    Err(e) => {
-                        warn!(page = page, error = %e, "Failed to fetch page");
-                        (page, Ok(Vec::new()))
+
+    let results: Vec<(i32, std::result::Result<Vec<OpenAlexResult>, GscholarError>)> =
+        stream::iter(urls)
+            .map(|(page, url)| {
+                let client = client.clone();
+                async move {
+                    debug!(url = %url, page = page, "Fetching OpenAlex page");
+                    match fetch_page(&client, &url).await {
+                        Ok(response) => {
+                            let works = parse_response(&response);
+                            (page, works)
+                        }
+                        Err(e) => {
+                            warn!(page = page, error = %e, "Failed to fetch page");
+                            (page, Ok(Vec::new()))
+                        }
                     }
                 }
-            }
-        })
-        .buffer_unordered(concurrent_limit)
-        .collect()
-        .await;
+            })
+            .buffer_unordered(concurrent_limit)
+            .collect()
+            .await;
 
     // Combine results in page order
     let mut all_results = Vec::new();
     let mut sorted_results: Vec<_> = results.into_iter().collect();
     sorted_results.sort_by_key(|(page, _)| *page);
-    
+
     for (page, result) in sorted_results {
         match result {
             Ok(works) => {
@@ -272,13 +274,13 @@ fn build_search_url(query: &str, page: i32, options: &QueryOptions) -> Result<St
     // Build filter params - use title_and_abstract.search for precise matching
     // This matches OpenAlex web interface behavior and gives much better results
     let mut filters = Vec::new();
-    
+
     // Primary search filter: search in title and abstract only (not full text)
     // Only encode the query itself, not the filter structure
     // Space should be encoded as + for OpenAlex compatibility
     let encoded_query = query.replace(' ', "+");
     filters.push(format!("title_and_abstract.search:{}", encoded_query));
-    
+
     // Add year filters
     if let Some(ylo) = options.ylo {
         let current_year = chrono::Utc::now().year();
@@ -297,11 +299,7 @@ fn build_search_url(query: &str, page: i32, options: &QueryOptions) -> Result<St
 
     let url = format!(
         "{}/works?page={}&per-page={}&mailto={}&filter={}",
-        OPENALEX_API_BASE,
-        page,
-        MAX_PER_PAGE,
-        POLITE_EMAIL,
-        filter_str
+        OPENALEX_API_BASE, page, MAX_PER_PAGE, POLITE_EMAIL, filter_str
     );
 
     // Select all needed fields
@@ -359,9 +357,7 @@ fn parse_response(json_str: &str) -> Result<Vec<OpenAlexResult>> {
         let mut result = OpenAlexResult::default();
 
         // Title
-        result.title = work.display_name
-            .or(work.title)
-            .unwrap_or_default();
+        result.title = work.display_name.or(work.title).unwrap_or_default();
 
         // OpenAlex ID
         result.openalex_id = work.id.unwrap_or_default();
@@ -492,7 +488,7 @@ fn reconstruct_abstract(inverted_index: &serde_json::Value) -> String {
     if let Some(obj) = inverted_index.as_object() {
         // Build (position, word) pairs
         let mut words: Vec<(i64, &str)> = Vec::new();
-        
+
         for (word, positions) in obj {
             if let Some(pos_array) = positions.as_array() {
                 for pos in pos_array {
@@ -524,7 +520,7 @@ mod tests {
             all_results: true,
         };
         let current_year = chrono::Utc::now().year();
-        
+
         let url = build_search_url("machine learning", 1, &options).unwrap();
         // Now uses filter=title_and_abstract.search: instead of search=
         assert!(url.contains("title_and_abstract.search:machine+learning"));

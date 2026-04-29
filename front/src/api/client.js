@@ -115,6 +115,86 @@ export async function fetchSources() {
     return response.json();
 }
 
+function adminHeaders(adminKey) {
+    return {
+        'Content-Type': 'application/json',
+        'X-API-Key': adminKey,
+    };
+}
+
+async function parseAdminResponse(response, fallbackMessage) {
+    const raw = await response.text();
+    const contentType = response.headers.get('content-type') || '';
+    const looksLikeHtml = contentType.includes('text/html') || raw.trimStart().startsWith('<!DOCTYPE html');
+
+    if (looksLikeHtml) {
+        throw new Error('管理接口未启用或请求被前端页面接管。请在 config.toml 的 [server] 中设置 admin_enabled = true，重启服务后再试。');
+    }
+
+    let payload = {};
+    try {
+        payload = raw ? JSON.parse(raw) : {};
+    } catch {
+        payload = { error: { message: raw || fallbackMessage } };
+    }
+
+    if (response.status === 401) {
+        throw new Error('Admin API Key 缺失或不正确。请粘贴 init-admin 生成的管理员 key。');
+    }
+
+    if (response.status === 403) {
+        const message = payload.error?.message || '当前 API Key 没有管理员权限，无法管理模型服务商。';
+        throw new Error(message);
+    }
+
+    if (!response.ok || payload.success === false) {
+        const message = payload.error?.message || fallbackMessage;
+        throw new Error(message);
+    }
+    return payload.data || {};
+}
+
+export async function listLlmProviders(adminKey) {
+    const response = await fetch(`${API_BASE}/api/v1/admin/llm/providers`, {
+        headers: { 'X-API-Key': adminKey },
+    });
+    return parseAdminResponse(response, 'Failed to load LLM providers');
+}
+
+export async function saveLlmProvider(adminKey, provider) {
+    const response = await fetch(`${API_BASE}/api/v1/admin/llm/providers`, {
+        method: 'POST',
+        headers: adminHeaders(adminKey),
+        body: JSON.stringify(provider),
+    });
+    return parseAdminResponse(response, 'Failed to save LLM provider');
+}
+
+export async function updateLlmProvider(adminKey, name, provider) {
+    const response = await fetch(`${API_BASE}/api/v1/admin/llm/providers/${encodeURIComponent(name)}`, {
+        method: 'PATCH',
+        headers: adminHeaders(adminKey),
+        body: JSON.stringify(provider),
+    });
+    return parseAdminResponse(response, 'Failed to update LLM provider');
+}
+
+export async function deleteLlmProvider(adminKey, name) {
+    const response = await fetch(`${API_BASE}/api/v1/admin/llm/providers/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: { 'X-API-Key': adminKey },
+    });
+    return parseAdminResponse(response, 'Failed to delete LLM provider');
+}
+
+export async function testLlmProvider(adminKey, name) {
+    const response = await fetch(`${API_BASE}/api/v1/admin/llm/providers/${encodeURIComponent(name)}/test`, {
+        method: 'POST',
+        headers: { 'X-API-Key': adminKey },
+    });
+    return parseAdminResponse(response, 'Failed to test LLM provider');
+}
+
 /**
  * Poll task status until completion
  * @param {string} taskId - Task ID

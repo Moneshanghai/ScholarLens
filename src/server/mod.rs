@@ -11,11 +11,10 @@
 pub mod admin;
 pub mod config;
 pub mod handlers;
+pub mod middleware;
 pub mod pipeline;
 pub mod recovery;
 pub mod responses;
 pub mod routes;
 pub mod state;
-pub mod task;
-pub mod middleware; // Auth logic
-
+pub mod task; // Auth logic

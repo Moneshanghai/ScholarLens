@@ -1,4 +1,4 @@
-use super::ProviderRegistry;
+﻿use super::ProviderRegistry;
 use super::super::provider_core::{to_openai_messages, ProviderRuntime, ProviderTrial};
 use super::super::{ChatMessage, LlmProvider};
 use crate::error::{GscholarError, Result};
@@ -74,7 +74,7 @@ impl ProviderTrial for BigModelProvider {
             .to_string();
 
         debug!(
-            provider = self.runtime.provider_name,
+            provider = %self.runtime.provider_name,
             content_size = content.len(),
             "Parsed provider JSON response (reasoning ignored)"
         );
@@ -97,7 +97,7 @@ impl ProviderTrial for BigModelProvider {
 #[async_trait]
 impl LlmProvider for BigModelProvider {
     fn name(&self) -> &str {
-        self.runtime.provider_name
+        self.runtime.provider_name.as_str()
     }
 
     async fn chat_completion(&self, messages: Vec<ChatMessage>) -> Result<String> {

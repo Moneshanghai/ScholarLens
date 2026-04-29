@@ -8,9 +8,10 @@ use super::handlers::{
     health_handler, pipeline_handler, sources_handler, task_bibtex_handler, task_download_handler,
     task_list_handler, task_status_handler,
 };
+use super::responses::ApiErrorResponse;
 use super::state::AppState;
 use axum::{
-    routing::{delete, get, patch, post},
+    routing::{any, delete, get, patch, post},
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -23,7 +24,7 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
     let admin_enabled = state.config.server.admin_enabled;
     info!(
         has_ranking_service = state.ranking_service.is_some(),
-        has_llm_filter = state.llm_filter.is_some(),
+        has_llm_filter = state.has_llm_filter(),
         admin_enabled = admin_enabled,
         static_dir = ?static_dir,
         "Building API router"
@@ -56,6 +57,21 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
         .route("/stats/keywords", get(admin::top_keywords_handler))
         .route("/stats/journals", get(admin::top_journals_handler))
         .route("/stats/daily", get(admin::daily_stats_handler))
+        // LLM providers
+        .route("/llm/providers", get(admin::list_llm_providers_handler))
+        .route("/llm/providers", post(admin::upsert_llm_provider_handler))
+        .route(
+            "/llm/providers/{name}",
+            patch(admin::patch_llm_provider_handler),
+        )
+        .route(
+            "/llm/providers/{name}",
+            delete(admin::delete_llm_provider_handler),
+        )
+        .route(
+            "/llm/providers/{name}/test",
+            post(admin::test_llm_provider_handler),
+        )
         // System
         .route("/system", get(admin::system_status_handler))
         // Apply Admin Auth Middleware to ALL admin routes
@@ -81,18 +97,27 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
         api_router = api_router.nest("/api/v1/admin", admin_routes);
     } else {
         info!("Admin routes are disabled by configuration");
+        api_router = api_router
+            .route("/api/v1/admin", any(admin_disabled_handler))
+            .route("/api/v1/admin/{*path}", any(admin_disabled_handler));
     }
 
     // If static_dir is provided, serve static files as fallback (SPA mode)
     if let Some(dir) = static_dir {
         let index_path = format!("{}/index.html", dir);
         info!(static_dir = %dir, index = %index_path, "Enabled static file fallback service");
-        let serve_dir = ServeDir::new(&dir).not_found_service(ServeFile::new(&index_path));
+        let serve_dir = ServeDir::new(&dir).fallback(ServeFile::new(&index_path));
 
         api_router.fallback_service(serve_dir)
     } else {
         api_router
     }
+}
+
+async fn admin_disabled_handler() -> ApiErrorResponse {
+    ApiErrorResponse::forbidden(
+        "Admin API is disabled. Set [server].admin_enabled = true in config.toml and restart the server.",
+    )
 }
 
 #[cfg(test)]

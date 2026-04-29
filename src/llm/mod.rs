@@ -5,6 +5,7 @@
 
 pub mod keyword_expansion;
 pub mod keyword_translation;
+pub mod openai_compatible;
 mod provider_core;
 
 use crate::error::{GscholarError, Result};
@@ -24,6 +25,7 @@ mod providers {
 }
 
 // Re-export built-in provider implementations
+pub use openai_compatible::{InterfaceType, OpenAiCompatibleProvider};
 pub use providers::aiping::AiPingProvider;
 pub use providers::bigmodel::BigModelProvider;
 pub use providers::siliconflow::SiliconFlowProvider;
@@ -270,11 +272,6 @@ impl LlmRelevanceFilter {
     pub fn build_from_config(
         llm_config: &crate::server::config::LlmSection,
     ) -> Result<Option<Arc<Self>>> {
-        if !llm_config.enable_filter {
-            info!("LLM filter disabled by config");
-            return Ok(None);
-        }
-
         let order = llm_config.provider_order();
         if order.is_empty() {
             warn!("LLM filter enabled but no providers configured");
@@ -329,6 +326,47 @@ impl LlmRelevanceFilter {
         );
 
         Ok(Some(Arc::new(Self::new(providers))))
+    }
+
+    /// Build runtime providers from Web/DB configuration.
+    pub fn build_from_runtime_configs(
+        configs: &[crate::db::llm_providers::RuntimeProvider],
+    ) -> Result<Option<Arc<Self>>> {
+        let mut providers: Vec<Arc<dyn LlmProvider>> = Vec::new();
+
+        for cfg in configs {
+            let interface_type = InterfaceType::parse(&cfg.interface_type)?;
+            match OpenAiCompatibleProvider::new(
+                &cfg.name,
+                interface_type,
+                &cfg.endpoint,
+                &cfg.model,
+                &cfg.api_key,
+            ) {
+                Ok(provider) => {
+                    info!(
+                        provider = %cfg.name,
+                        interface_type = interface_type.as_str(),
+                        model = %cfg.model,
+                        "DB-configured LLM provider initialized"
+                    );
+                    providers.push(Arc::new(provider));
+                }
+                Err(error) => {
+                    warn!(
+                        provider = %cfg.name,
+                        error = %error,
+                        "Skipping invalid DB-configured LLM provider"
+                    );
+                }
+            }
+        }
+
+        if providers.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Arc::new(Self::new(providers))))
+        }
     }
 
     /// Check relevance of a single paper (with fallback)

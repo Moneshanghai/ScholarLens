@@ -16,6 +16,7 @@ export class ApiPage {
           </button>
           <a href="/" class="header-logo">ScholarLens</a>
           <span class="header-link header-link-active"><i class="bi bi-file-earmark-text"></i> API 文档</span>
+          <a href="/settings" class="header-link"><i class="bi bi-gear"></i> Settings</a>
         </div>
       </header>
 

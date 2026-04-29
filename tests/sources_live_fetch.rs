@@ -170,7 +170,11 @@ async fn test_sources_live_verbose_report() {
         .await
         .expect("arxiv live request should not fail");
     print_header("REPORT arXiv");
-    println!("count={} (target={})", arxiv_papers.len(), arxiv_opts.max_results);
+    println!(
+        "count={} (target={})",
+        arxiv_papers.len(),
+        arxiv_opts.max_results
+    );
     for (i, p) in arxiv_papers.iter().take(10).enumerate() {
         println!("{} | {} | {} | {}", i + 1, p.year, p.title, p.url);
     }
@@ -198,7 +202,11 @@ async fn test_sources_live_verbose_report() {
         .await
         .expect("pubmed live request should not fail");
     print_header("REPORT PubMed");
-    println!("count={} (target={})", pubmed_papers.len(), pubmed_opts.max_results);
+    println!(
+        "count={} (target={})",
+        pubmed_papers.len(),
+        pubmed_opts.max_results
+    );
     for (i, p) in pubmed_papers.iter().take(10).enumerate() {
         println!("{} | {} | {} | {}", i + 1, p.year, p.title, p.url);
     }
@@ -221,23 +229,29 @@ async fn test_sources_live_verbose_report() {
         request_delay_ms: config.search.xrxiv.request_delay_ms,
         max_retries: config.search.xrxiv.max_retries,
     };
-    let biorxiv_papers =
-        xrxiv::search_papers(xrxiv::XRxivServer::BioRxiv, "ai", &xrxiv_common)
-            .await
-            .expect("biorxiv live request should not fail");
+    let biorxiv_papers = xrxiv::search_papers(xrxiv::XRxivServer::BioRxiv, "ai", &xrxiv_common)
+        .await
+        .expect("biorxiv live request should not fail");
     print_header("REPORT bioRxiv");
-    println!("count={} (target={})", biorxiv_papers.len(), xrxiv_common.max_results);
+    println!(
+        "count={} (target={})",
+        biorxiv_papers.len(),
+        xrxiv_common.max_results
+    );
     for (i, p) in biorxiv_papers.iter().take(10).enumerate() {
         println!("{} | {} | {} | {}", i + 1, p.year, p.title, p.url);
     }
 
     // medRxiv
-    let medrxiv_papers =
-        xrxiv::search_papers(xrxiv::XRxivServer::MedRxiv, "ai", &xrxiv_common)
-            .await
-            .expect("medrxiv live request should not fail");
+    let medrxiv_papers = xrxiv::search_papers(xrxiv::XRxivServer::MedRxiv, "ai", &xrxiv_common)
+        .await
+        .expect("medrxiv live request should not fail");
     print_header("REPORT medRxiv");
-    println!("count={} (target={})", medrxiv_papers.len(), xrxiv_common.max_results);
+    println!(
+        "count={} (target={})",
+        medrxiv_papers.len(),
+        xrxiv_common.max_results
+    );
     for (i, p) in medrxiv_papers.iter().take(10).enumerate() {
         println!("{} | {} | {} | {}", i + 1, p.year, p.title, p.url);
     }

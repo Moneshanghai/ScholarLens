@@ -24,8 +24,12 @@ pub struct PaginationQuery {
     pub limit: u32,
 }
 
-fn default_page() -> u32 { 1 }
-fn default_limit() -> u32 { 20 }
+fn default_page() -> u32 {
+    1
+}
+fn default_limit() -> u32 {
+    20
+}
 
 #[derive(Debug, Deserialize)]
 pub struct DaysQuery {
@@ -33,7 +37,9 @@ pub struct DaysQuery {
     pub days: u32,
 }
 
-fn default_days() -> u32 { 7 }
+fn default_days() -> u32 {
+    7
+}
 
 // ============================================================================
 // API Key Management
@@ -48,7 +54,9 @@ pub struct CreateKeyRequest {
     pub rate_limit_rps: u32,
 }
 
-fn default_rps() -> u32 { 10 }
+fn default_rps() -> u32 {
+    10
+}
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateKeyRequest {
@@ -66,12 +74,13 @@ pub async fn list_keys_handler(
     let page = query.page;
     let limit = query.limit;
 
-    let (keys, total) = state.run_db(move |conn| {
-        api_keys::list(&conn, page, limit)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to list keys");
-        ApiErrorResponse::internal_error("Failed to list keys")
-    })?;
+    let (keys, total) = state
+        .run_db(move |conn| api_keys::list(&conn, page, limit))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to list keys");
+            ApiErrorResponse::internal_error("Failed to list keys")
+        })?;
 
     let pagination = Pagination::new(page, limit, total);
     Ok(responses::success_paginated(keys, pagination))
@@ -92,12 +101,13 @@ pub async fn create_key_handler(
     let is_admin = request.is_admin;
     let rps = request.rate_limit_rps;
 
-    let created = state.run_db(move |conn| {
-        api_keys::create(&conn, &name, is_admin, rps)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to create key");
-        ApiErrorResponse::internal_error("Failed to create key")
-    })?;
+    let created = state
+        .run_db(move |conn| api_keys::create(&conn, &name, is_admin, rps))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to create key");
+            ApiErrorResponse::internal_error("Failed to create key")
+        })?;
 
     info!(key_id = %created.id, name = %created.name, "API key created");
     Ok(responses::success(created))
@@ -111,12 +121,14 @@ pub async fn get_key_handler(
     use crate::db::api_keys;
 
     let id = key_id.clone();
-    let key = state.run_db(move |conn| {
-        api_keys::get_by_id(&conn, &id)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to get key");
-        ApiErrorResponse::internal_error("Failed to get key")
-    })?.ok_or_else(|| ApiErrorResponse::not_found("Key not found"))?;
+    let key = state
+        .run_db(move |conn| api_keys::get_by_id(&conn, &id))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to get key");
+            ApiErrorResponse::internal_error("Failed to get key")
+        })?
+        .ok_or_else(|| ApiErrorResponse::not_found("Key not found"))?;
 
     Ok(responses::success(key))
 }
@@ -133,12 +145,13 @@ pub async fn update_key_handler(
     let name = request.name.clone();
     let rps = request.rate_limit_rps;
 
-    let updated = state.run_db(move |conn| {
-        api_keys::update(&conn, &id, name.as_deref(), rps)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to update key");
-        ApiErrorResponse::internal_error("Failed to update key")
-    })?;
+    let updated = state
+        .run_db(move |conn| api_keys::update(&conn, &id, name.as_deref(), rps))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to update key");
+            ApiErrorResponse::internal_error("Failed to update key")
+        })?;
 
     if !updated {
         return Err(ApiErrorResponse::not_found("Key not found"));
@@ -156,12 +169,13 @@ pub async fn delete_key_handler(
     use crate::db::api_keys;
 
     let id = key_id.clone();
-    let deleted = state.run_db(move |conn| {
-        api_keys::delete(&conn, &id)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to delete key");
-        ApiErrorResponse::internal_error("Failed to delete key")
-    })?;
+    let deleted = state
+        .run_db(move |conn| api_keys::delete(&conn, &id))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to delete key");
+            ApiErrorResponse::internal_error("Failed to delete key")
+        })?;
 
     if !deleted {
         return Err(ApiErrorResponse::not_found("Key not found"));
@@ -185,12 +199,13 @@ pub async fn list_cache_handler(
     let page = query.page;
     let limit = query.limit;
 
-    let (journals, total) = state.run_db(move |conn| {
-        journal_cache::list(&conn, page, limit)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to list cache");
-        ApiErrorResponse::internal_error("Failed to list cache")
-    })?;
+    let (journals, total) = state
+        .run_db(move |conn| journal_cache::list(&conn, page, limit))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to list cache");
+            ApiErrorResponse::internal_error("Failed to list cache")
+        })?;
 
     let pagination = Pagination::new(page, limit, total);
     Ok(responses::success_paginated(journals, pagination))
@@ -202,12 +217,13 @@ pub async fn cache_stats_handler(
 ) -> Result<impl IntoResponse, ApiErrorResponse> {
     use crate::db::journal_cache;
 
-    let stats = state.run_db(move |conn| {
-        journal_cache::get_stats(&conn)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to get cache stats");
-        ApiErrorResponse::internal_error("Failed to get cache stats")
-    })?;
+    let stats = state
+        .run_db(move |conn| journal_cache::get_stats(&conn))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to get cache stats");
+            ApiErrorResponse::internal_error("Failed to get cache stats")
+        })?;
 
     Ok(responses::success(stats))
 }
@@ -218,17 +234,20 @@ pub async fn clear_cache_handler(
 ) -> Result<impl IntoResponse, ApiErrorResponse> {
     use crate::db::journal_cache;
 
-    let cleared = state.run_db(move |conn| {
-        journal_cache::clear_all(&conn)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to clear cache");
-        ApiErrorResponse::internal_error("Failed to clear cache")
-    })?;
+    let cleared = state
+        .run_db(move |conn| journal_cache::clear_all(&conn))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to clear cache");
+            ApiErrorResponse::internal_error("Failed to clear cache")
+        })?;
 
     info!(cleared = cleared, "Journal cache cleared");
 
     #[derive(Serialize)]
-    struct ClearResult { cleared: usize }
+    struct ClearResult {
+        cleared: usize,
+    }
     Ok(responses::success(ClearResult { cleared }))
 }
 
@@ -240,12 +259,13 @@ pub async fn delete_cache_entry_handler(
     use crate::db::journal_cache;
 
     let journal_name = name.clone();
-    let deleted = state.run_db(move |conn| {
-        journal_cache::delete(&conn, &journal_name)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to delete cache entry");
-        ApiErrorResponse::internal_error("Failed to delete cache entry")
-    })?;
+    let deleted = state
+        .run_db(move |conn| journal_cache::delete(&conn, &journal_name))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to delete cache entry");
+            ApiErrorResponse::internal_error("Failed to delete cache entry")
+        })?;
 
     if !deleted {
         return Err(ApiErrorResponse::not_found("Cache entry not found"));
@@ -264,14 +284,17 @@ pub async fn stats_overview_handler(
 ) -> Result<impl IntoResponse, ApiErrorResponse> {
     use crate::db::{analytics, journal_cache};
 
-    let result = state.run_db(move |conn| {
-        let overview = analytics::get_overview(&conn)?;
-        let cache_stats = journal_cache::get_stats(&conn).ok();
-        Ok((overview, cache_stats))
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to get overview");
-        ApiErrorResponse::internal_error("Failed to get overview")
-    })?;
+    let result = state
+        .run_db(move |conn| {
+            let overview = analytics::get_overview(&conn)?;
+            let cache_stats = journal_cache::get_stats(&conn).ok();
+            Ok((overview, cache_stats))
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to get overview");
+            ApiErrorResponse::internal_error("Failed to get overview")
+        })?;
 
     let (overview, cache_stats) = result;
 
@@ -296,12 +319,13 @@ pub async fn top_keywords_handler(
     use crate::db::analytics;
 
     let limit = query.limit;
-    let keywords = state.run_db(move |conn| {
-        analytics::get_top_keywords(&conn, limit)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to get keywords");
-        ApiErrorResponse::internal_error("Failed to get keywords")
-    })?;
+    let keywords = state
+        .run_db(move |conn| analytics::get_top_keywords(&conn, limit))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to get keywords");
+            ApiErrorResponse::internal_error("Failed to get keywords")
+        })?;
 
     Ok(responses::success(keywords))
 }
@@ -314,12 +338,13 @@ pub async fn top_journals_handler(
     use crate::db::analytics;
 
     let limit = query.limit;
-    let journals = state.run_db(move |conn| {
-        analytics::get_top_journals(&conn, limit)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to get journals");
-        ApiErrorResponse::internal_error("Failed to get journals")
-    })?;
+    let journals = state
+        .run_db(move |conn| analytics::get_top_journals(&conn, limit))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to get journals");
+            ApiErrorResponse::internal_error("Failed to get journals")
+        })?;
 
     Ok(responses::success(journals))
 }
@@ -332,14 +357,158 @@ pub async fn daily_stats_handler(
     use crate::db::analytics;
 
     let days = query.days;
-    let daily = state.run_db(move |conn| {
-        analytics::get_daily_stats(&conn, days)
-    }).await.map_err(|e| {
-        error!(error = %e, "Failed to get daily stats");
-        ApiErrorResponse::internal_error("Failed to get daily stats")
-    })?;
+    let daily = state
+        .run_db(move |conn| analytics::get_daily_stats(&conn, days))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to get daily stats");
+            ApiErrorResponse::internal_error("Failed to get daily stats")
+        })?;
 
     Ok(responses::success(daily))
+}
+
+// ============================================================================
+// LLM Provider Management
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct LlmProviderListResponse {
+    pub providers: Vec<crate::db::llm_providers::PublicProvider>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LlmProviderTestResponse {
+    pub ok: bool,
+    pub provider: String,
+    pub output: String,
+}
+
+/// GET /api/v1/admin/llm/providers - List LLM providers without exposing keys.
+pub async fn list_llm_providers_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiErrorResponse> {
+    let providers = state
+        .run_db(crate::db::llm_providers::list_public)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to list LLM providers");
+            ApiErrorResponse::internal_error("Failed to list LLM providers")
+        })?;
+
+    Ok(responses::success(LlmProviderListResponse { providers }))
+}
+
+/// POST /api/v1/admin/llm/providers - Create or update an LLM provider.
+pub async fn upsert_llm_provider_handler(
+    State(state): State<AppState>,
+    Json(request): Json<crate::db::llm_providers::UpsertProvider>,
+) -> Result<impl IntoResponse, ApiErrorResponse> {
+    upsert_llm_provider_inner(state, request).await
+}
+
+/// PATCH /api/v1/admin/llm/providers/{name} - Update a provider by path name.
+pub async fn patch_llm_provider_handler(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(mut request): Json<crate::db::llm_providers::UpsertProvider>,
+) -> Result<impl IntoResponse, ApiErrorResponse> {
+    request.name = name;
+    upsert_llm_provider_inner(state, request).await
+}
+
+async fn upsert_llm_provider_inner(
+    state: AppState,
+    request: crate::db::llm_providers::UpsertProvider,
+) -> Result<impl IntoResponse, ApiErrorResponse> {
+    state
+        .run_db(move |conn| crate::db::llm_providers::upsert(conn, request))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to upsert LLM provider");
+            ApiErrorResponse::bad_request(&format!("Failed to save LLM provider: {}", e))
+        })?;
+
+    state.reload_llm_from_db().await.map_err(|e| {
+        error!(error = %e, "Failed to reload LLM providers");
+        ApiErrorResponse::internal_error("Provider saved but runtime reload failed")
+    })?;
+
+    Ok(responses::ok())
+}
+
+/// DELETE /api/v1/admin/llm/providers/{name} - Delete an LLM provider.
+pub async fn delete_llm_provider_handler(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, ApiErrorResponse> {
+    let deleted = state
+        .run_db(move |conn| crate::db::llm_providers::delete(conn, &name))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to delete LLM provider");
+            ApiErrorResponse::internal_error("Failed to delete LLM provider")
+        })?;
+
+    if !deleted {
+        return Err(ApiErrorResponse::not_found("LLM provider not found"));
+    }
+
+    state.reload_llm_from_db().await.map_err(|e| {
+        error!(error = %e, "Failed to reload LLM providers");
+        ApiErrorResponse::internal_error("Provider deleted but runtime reload failed")
+    })?;
+
+    Ok(responses::ok())
+}
+
+/// POST /api/v1/admin/llm/providers/{name}/test - Send a minimal test prompt.
+pub async fn test_llm_provider_handler(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, ApiErrorResponse> {
+    use crate::llm::{ChatMessage, InterfaceType, LlmProvider, OpenAiCompatibleProvider};
+
+    let provider_cfg = state
+        .run_db(move |conn| crate::db::llm_providers::get_runtime(conn, &name))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to get LLM provider");
+            ApiErrorResponse::internal_error("Failed to get LLM provider")
+        })?
+        .ok_or_else(|| ApiErrorResponse::not_found("LLM provider not found"))?;
+
+    let interface_type = InterfaceType::parse(&provider_cfg.interface_type).map_err(|e| {
+        ApiErrorResponse::bad_request(&format!("Invalid provider interface_type: {}", e))
+    })?;
+    let provider = OpenAiCompatibleProvider::new(
+        &provider_cfg.name,
+        interface_type,
+        &provider_cfg.endpoint,
+        &provider_cfg.model,
+        &provider_cfg.api_key,
+    )
+    .map_err(|e| ApiErrorResponse::bad_request(&format!("Invalid provider config: {}", e)))?;
+
+    let output = provider
+        .chat_completion(vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Reply with exactly: OK".to_string(),
+        }])
+        .await
+        .map_err(|e| {
+            error!(provider = %provider_cfg.name, error = %e, "LLM provider test failed");
+            ApiErrorResponse::bad_request(&format!(
+                "LLM provider test failed: {}. 请检查 Endpoint 是否为 OpenAI 兼容地址；也可以只填 Base URL，系统会按接口类型自动补全 /v1/chat/completions 或 /v1/responses。",
+                e
+            ))
+        })?;
+
+    Ok(responses::success(LlmProviderTestResponse {
+        ok: true,
+        provider: provider_cfg.name,
+        output,
+    }))
 }
 
 // ============================================================================
@@ -355,12 +524,13 @@ pub async fn system_status_handler(
     let uptime = state.task_store.uptime();
     let active_tasks = state.task_store.len();
 
-    let db_stats = state.run_db(move |conn| {
-        Ok(get_db_stats(&conn).ok())
-    }).await.map_err(|e| {
-        error!(error = %e, "Database error");
-        ApiErrorResponse::internal_error("Database error")
-    })?;
+    let db_stats = state
+        .run_db(move |conn| Ok(get_db_stats(&conn).ok()))
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Database error");
+            ApiErrorResponse::internal_error("Database error")
+        })?;
 
     // Get database file size
     let db_size = std::fs::metadata("data/rscholar.db")

@@ -38,7 +38,7 @@ impl Default for SortBy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct LocalRelevanceScore {
+pub struct LocalRelevanceScore {
     pub score: u8,
     pub reason: String,
 }
@@ -209,12 +209,28 @@ fn token_set(text: &str) -> HashSet<String> {
 }
 
 fn tokenize(text: &str) -> Vec<String> {
-    text.to_lowercase()
+    let lower = text.to_lowercase();
+    let mut tokens: Vec<String> = lower
         .split(|c: char| !c.is_alphanumeric())
         .map(str::trim)
         .filter(|s| s.len() > 1)
         .map(str::to_string)
-        .collect()
+        .collect();
+
+    let cjk_chars: Vec<char> = lower
+        .chars()
+        .filter(|ch| {
+            ('\u{4E00}'..='\u{9FFF}').contains(ch)
+                || ('\u{3400}'..='\u{4DBF}').contains(ch)
+                || ('\u{3040}'..='\u{30FF}').contains(ch)
+                || ('\u{AC00}'..='\u{D7AF}').contains(ch)
+        })
+        .collect();
+    for gram in cjk_chars.windows(2) {
+        tokens.push(gram.iter().collect());
+    }
+
+    tokens
 }
 
 fn count_hits(terms: &[String], haystack: &HashSet<String>) -> usize {

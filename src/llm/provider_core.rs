@@ -21,7 +21,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct ProviderRuntime {
-    pub provider_name: &'static str,
+    pub provider_name: String,
     pub endpoint: String,
     pub api_key: String,
     pub model: String,
@@ -30,13 +30,13 @@ pub struct ProviderRuntime {
 
 impl ProviderRuntime {
     pub fn new(
-        provider_name: &'static str,
+        provider_name: impl Into<String>,
         endpoint: impl Into<String>,
         api_key: impl Into<String>,
         model: impl Into<String>,
     ) -> Result<Self> {
         Ok(Self {
-            provider_name,
+            provider_name: provider_name.into(),
             endpoint: endpoint.into(),
             api_key: api_key.into(),
             model: model.into(),
@@ -65,7 +65,7 @@ pub trait ProviderTrial: Send + Sync {
             .unwrap_or(0);
 
         debug!(
-            provider = runtime.provider_name,
+            provider = %runtime.provider_name,
             model = %runtime.model,
             endpoint = %runtime.endpoint,
             payload_size = payload_size,
@@ -93,7 +93,7 @@ pub trait ProviderTrial: Send + Sync {
 
         let body = response.text().await?;
         debug!(
-            provider = runtime.provider_name,
+            provider = %runtime.provider_name,
             body_size = body.len(),
             "Received LLM provider response body"
         );

@@ -5,7 +5,9 @@
 //! - String filter validation
 //! - RankingMetrics operations
 
-use rscholar::ranking::{LeasePolicy, RankingClient, RankingMetrics, RankingService, RankingServiceOptions};
+use rscholar::ranking::{
+    LeasePolicy, RankingClient, RankingMetrics, RankingService, RankingServiceOptions,
+};
 
 // ============================================================================
 // Filter Tests
@@ -56,7 +58,7 @@ fn test_passes_string_filter_no_match() {
 #[test]
 fn test_ranking_metrics_default() {
     let metrics = RankingMetrics::default();
-    
+
     assert!(metrics.sciif.is_none());
     assert!(metrics.jci.is_none());
     assert!(metrics.sci.is_none());
@@ -75,7 +77,7 @@ fn test_ranking_metrics_with_values() {
         sci_base: None,
         sci_up: None,
     };
-    
+
     assert_eq!(metrics.sciif.as_deref(), Some("10.5"));
     assert_eq!(metrics.sci.as_deref(), Some("Q1"));
 }
@@ -90,13 +92,31 @@ fn test_get_metric() {
         sci_base: Some("Base Value".to_string()),
         sci_up: Some("Up Value".to_string()),
     };
-    
-    assert_eq!(RankingClient::get_metric(&metrics, "sciif"), Some("15.0".to_string()));
-    assert_eq!(RankingClient::get_metric(&metrics, "jci"), Some("3.5".to_string()));
-    assert_eq!(RankingClient::get_metric(&metrics, "sci"), Some("Q1".to_string()));
-    assert_eq!(RankingClient::get_metric(&metrics, "sciUpTop"), Some("Top 10%".to_string()));
-    assert_eq!(RankingClient::get_metric(&metrics, "sciBase"), Some("Base Value".to_string()));
-    assert_eq!(RankingClient::get_metric(&metrics, "sciUp"), Some("Up Value".to_string()));
+
+    assert_eq!(
+        RankingClient::get_metric(&metrics, "sciif"),
+        Some("15.0".to_string())
+    );
+    assert_eq!(
+        RankingClient::get_metric(&metrics, "jci"),
+        Some("3.5".to_string())
+    );
+    assert_eq!(
+        RankingClient::get_metric(&metrics, "sci"),
+        Some("Q1".to_string())
+    );
+    assert_eq!(
+        RankingClient::get_metric(&metrics, "sciUpTop"),
+        Some("Top 10%".to_string())
+    );
+    assert_eq!(
+        RankingClient::get_metric(&metrics, "sciBase"),
+        Some("Base Value".to_string())
+    );
+    assert_eq!(
+        RankingClient::get_metric(&metrics, "sciUp"),
+        Some("Up Value".to_string())
+    );
     assert_eq!(RankingClient::get_metric(&metrics, "unknown"), None);
 }
 
@@ -110,9 +130,9 @@ fn test_ranking_metrics_clone() {
         sci_base: None,
         sci_up: None,
     };
-    
+
     let cloned = original.clone();
-    
+
     assert_eq!(cloned.sciif, original.sciif);
     assert_eq!(cloned.sci, original.sci);
 }
@@ -127,7 +147,7 @@ fn test_ranking_metrics_serialize() {
         sci_base: None,
         sci_up: None,
     };
-    
+
     let json = serde_json::to_string(&metrics).expect("serialize");
     assert!(json.contains("\"sciif\":\"10.0\""));
     assert!(json.contains("\"sci\":\"Q1\""));

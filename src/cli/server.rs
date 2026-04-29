@@ -136,6 +136,17 @@ pub async fn run_api_server(
     let state = AppState::new(config.clone(), db, llm_filter, ranking_service);
     let task_store = state.task_store.clone();
 
+    let has_db_llm_providers = state
+        .run_db(rscholar::db::llm_providers::has_any)
+        .await
+        .map_err(|e| anyhow::anyhow!("LLM provider DB check error: {}", e))?;
+    if has_db_llm_providers {
+        state
+            .reload_llm_from_db()
+            .await
+            .map_err(|e| anyhow::anyhow!("LLM provider reload error: {}", e))?;
+    }
+
     // Recover interrupted tasks (mark RUNNING tasks as FAILED after restart)
     let recovered = recovery::recover_interrupted_tasks(&state.db).await;
     if recovered > 0 {

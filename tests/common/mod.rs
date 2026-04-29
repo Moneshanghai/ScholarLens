@@ -23,7 +23,7 @@ pub fn init_test_env() {
 }
 
 /// Test database context
-/// 
+///
 /// Creates a temporary SQLite database that is automatically
 /// cleaned up when this struct is dropped.
 pub struct TestDb {
@@ -35,25 +35,25 @@ impl TestDb {
     /// Create a new test database with all tables initialized
     pub fn new() -> Self {
         init_test_env();
-        
+
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
-        
+
         let config = DbConfig {
             path: db_path.to_string_lossy().to_string(),
             max_connections: 2,
             pool_timeout_secs: 5,
             busy_timeout_ms: 1000,
         };
-        
+
         let pool = init_pool(&config).expect("Failed to init test database");
-        
+
         Self {
             pool,
             _temp_dir: temp_dir,
         }
     }
-    
+
     /// Get a sync connection for direct DB operations
     pub fn get_conn(&self) -> rusqlite::Connection {
         let path = self._temp_dir.path().join("test.db");

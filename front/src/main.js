@@ -6,6 +6,7 @@
 import { fetchTaskHistory } from './api/client.js';
 import { HomePage } from './pages/home.js';
 import { ApiPage } from './pages/api.js';
+import { SettingsPage } from './pages/settings.js';
 import { TaskPage } from './pages/task.js';
 import { historyManager } from './utils/history.js';
 
@@ -21,6 +22,7 @@ class Router {
         this.routes = {
             '/': HomePage,
             '/docs': ApiPage,  // Changed from /api to avoid proxy conflict
+            '/settings': SettingsPage,
             '/task': TaskPage,
         };
 

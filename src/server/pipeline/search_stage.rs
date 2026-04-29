@@ -91,8 +91,14 @@ pub(super) async fn run_parallel_search(
             let source_started = Instant::now();
             let result = match source.as_str() {
                 "semanticscholar" => {
-                    run_semantic_scholar_source(task_id, keyword, ylo, ss_limit, semantic_scholar_cfg)
-                        .await
+                    run_semantic_scholar_source(
+                        task_id,
+                        keyword,
+                        ylo,
+                        ss_limit,
+                        semantic_scholar_cfg,
+                    )
+                    .await
                 }
                 "openalex" => run_openalex_source(task_id, oa_query, ylo, oa_limit).await,
                 "arxiv" => run_arxiv_source(task_id, keyword, ylo, arxiv_cfg).await,
