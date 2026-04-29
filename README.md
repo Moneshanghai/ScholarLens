@@ -1,8 +1,6 @@
 # ScholarLens
 [English](./README.md) [中文](./README_zh.md)
 
-[Example web](http://c76d.abrdns.com/) : http://c76d.abrdns.com/ 
-
 ScholarLens is a Rust-based academic literature search service with asynchronous task execution, multi-source retrieval, metadata enrichment, ranking filters, and CSV/BibTeX export.
 
 This document reflects the current code in `src/`.
