@@ -8,6 +8,8 @@
 
 # ===== Config (contains real API keys) =====
 config.toml
+config.toml.bak.*
+init-admin-output.txt
 
 # ===== Runtime data =====
 /data/

@@ -1695,6 +1695,7 @@ body {
 
 .sidebar-overlay {
   display: block;
+  z-index: 210;
 }
 
 .hero {

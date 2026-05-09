@@ -113,7 +113,7 @@ export class TaskPage {
                 </div>
 
                 <div id="query-plan-panel" class="query-plan-panel hidden"></div>
-                 
+
                 <div class="download-buttons">
                   <button id="download-csv" class="btn btn-secondary">
                     <i class="bi bi-download btn-icon"></i>

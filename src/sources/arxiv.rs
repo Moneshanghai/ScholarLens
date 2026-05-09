@@ -8,22 +8,24 @@
 //! - This module performs keyword search and parses essential metadata.
 //! - To be polite to arXiv infrastructure, requests are throttled by default.
 
-use crate::error::Result;
-use crate::sources::retry::{next_rate_limit_delay, RateLimitRetryPolicy};
+use crate::error::{GscholarError, Result};
 use crate::sources::{SourcePaper, SourceProvider};
 use async_trait::async_trait;
 use regex::Regex;
-use reqwest::Client;
+use reqwest::{Client, Proxy};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{info, warn};
 
 const ARXIV_API_URLS: [&str; 2] = [
-    "https://export.arxiv.org/api/query",
     "https://arxiv.org/api/query",
+    "https://export.arxiv.org/api/query",
 ];
+const ARXIV_HTML_SEARCH_URL: &str = "https://arxiv.org/search/";
 const ARXIV_MAX_PER_REQUEST: usize = 2000;
+const ARXIV_USER_AGENT: &str =
+    "ScholarLens/0.1 (https://github.com/Moneshanghai/ScholarLens; arxiv source)";
 static ARXIV_SERIAL_REQUEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 /// arXiv search options.
@@ -75,10 +77,16 @@ pub struct ArxivProvider {
 
 impl ArxivProvider {
     pub fn new(timeout_secs: u64) -> Result<Self> {
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
-            .user_agent("ScholarLens/0.1 (arxiv source)")
-            .build()?;
+            .user_agent(ARXIV_USER_AGENT);
+
+        if let Some(proxy_url) = arxiv_proxy_url() {
+            builder = builder.proxy(Proxy::all(proxy_url)?);
+            info!("arXiv proxy enabled from ARXIV_PROXY/ARXIV_HTTPS_PROXY");
+        }
+
+        let client = builder.build()?;
         Ok(Self { client })
     }
 }
@@ -119,6 +127,33 @@ async fn search_with_client(
     query: &str,
     options: &ArxivQueryOptions,
 ) -> Result<Vec<ArxivResult>> {
+    match search_api_with_client(client, query, options).await {
+        Ok(papers) => Ok(papers),
+        Err(api_error) => {
+            warn!(
+                error = %api_error,
+                "arXiv API search failed, trying HTML search fallback"
+            );
+            match search_html_fallback(client, query, options).await {
+                Ok(papers) => Ok(papers),
+                Err(fallback_error) => {
+                    warn!(
+                        api_error = %api_error,
+                        fallback_error = %fallback_error,
+                        "arXiv HTML search fallback failed"
+                    );
+                    Err(api_error)
+                }
+            }
+        }
+    }
+}
+
+async fn search_api_with_client(
+    client: &Client,
+    query: &str,
+    options: &ArxivQueryOptions,
+) -> Result<Vec<ArxivResult>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -154,11 +189,9 @@ async fn search_with_client(
 
         let mut resp_text = None;
         let mut last_error = None;
+        let mut rate_limited_after_secs = None;
 
         for endpoint in ARXIV_API_URLS {
-            let policy = RateLimitRetryPolicy::conservative();
-            let mut rate_limit_retries = 0u32;
-            let mut total_rate_limit_wait = Duration::ZERO;
             let mut server_error_retries = 0u32;
 
             let page_resp = loop {
@@ -167,32 +200,23 @@ async fn search_with_client(
                     Ok(resp) => {
                         let status = resp.status();
                         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                            rate_limit_retries += 1;
                             let headers = resp.headers().clone();
                             let error_text = resp.text().await.unwrap_or_default();
-                            if let Some(delay) = next_rate_limit_delay(
-                                &headers,
-                                rate_limit_retries,
-                                total_rate_limit_wait,
-                                policy,
-                            ) {
-                                total_rate_limit_wait += delay;
-                                warn!(
-                                    source = "arxiv",
-                                    endpoint = endpoint,
-                                    status = 429,
-                                    attempt = rate_limit_retries,
-                                    delay_secs = delay.as_secs_f64(),
-                                    error = %error_text,
-                                    "arXiv rate limited (429), retrying"
-                                );
-                                tokio::time::sleep(delay).await;
-                                continue;
-                            }
-                            last_error = Some(format!(
-                                "arXiv rate limited after {} retries",
-                                policy.max_retries
-                            ));
+                            let retry_after = headers
+                                .get(reqwest::header::RETRY_AFTER)
+                                .and_then(|value| value.to_str().ok())
+                                .and_then(|value| value.trim().parse::<u64>().ok())
+                                .unwrap_or(600);
+                            last_error = Some("arXiv API rate limited".to_string());
+                            rate_limited_after_secs = Some(600);
+                            warn!(
+                                source = "arxiv",
+                                endpoint = endpoint,
+                                status = 429,
+                                retry_after_secs = retry_after,
+                                error = %error_text,
+                                "arXiv API rate limited (429), switching to HTML fallback"
+                            );
                             break None;
                         }
                         if status.is_server_error() {
@@ -243,6 +267,14 @@ async fn search_with_client(
                 resp_text = Some(text);
                 break;
             }
+
+            if rate_limited_after_secs.is_some() {
+                break;
+            }
+        }
+
+        if let Some(retry_after) = rate_limited_after_secs {
+            return Err(GscholarError::RateLimited(retry_after));
         }
 
         let resp_text = resp_text.ok_or_else(|| {
@@ -273,6 +305,99 @@ async fn search_with_client(
     out.truncate(max_results);
     info!(total = out.len(), "arXiv search completed");
     Ok(out)
+}
+
+async fn search_html_fallback(
+    client: &Client,
+    query: &str,
+    options: &ArxivQueryOptions,
+) -> Result<Vec<ArxivResult>> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let limit = options.max_results.clamp(1, 200);
+    let request_size = html_search_size(limit);
+    let mut params = vec![
+        ("query", trimmed.to_string()),
+        ("searchtype", "all".to_string()),
+        ("abstracts", "show".to_string()),
+        ("size", request_size.to_string()),
+    ];
+    let order = html_search_order(options);
+    if !order.is_empty() {
+        params.push(("order", order));
+    }
+
+    info!(
+        query = trimmed,
+        size = request_size,
+        limit = limit,
+        "Starting arXiv HTML search fallback"
+    );
+
+    let resp = send_arxiv_request(
+        client,
+        ARXIV_HTML_SEARCH_URL,
+        &params,
+        options.request_delay_ms,
+    )
+    .await?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(GscholarError::RateLimited(600));
+    }
+    if !status.is_success() {
+        return Err(GscholarError::Api {
+            code: status.as_u16() as i32,
+            message: "arXiv HTML search returned non-success status".to_string(),
+        });
+    }
+
+    let html = resp.text().await?;
+    let mut papers = parse_search_html_results(&html);
+    papers.truncate(limit);
+    info!(total = papers.len(), "arXiv HTML search fallback completed");
+    Ok(papers)
+}
+
+fn html_search_size(limit: usize) -> usize {
+    match limit {
+        0..=25 => 25,
+        26..=50 => 50,
+        51..=100 => 100,
+        _ => 200,
+    }
+}
+
+fn html_search_order(options: &ArxivQueryOptions) -> String {
+    let newest_first = options.sort_order.eq_ignore_ascii_case("descending");
+    match options.sort_by.as_str() {
+        "submittedDate" => {
+            if newest_first {
+                "-submitted_date".to_string()
+            } else {
+                "submitted_date".to_string()
+            }
+        }
+        "lastUpdatedDate" => {
+            if newest_first {
+                "-announced_date_first".to_string()
+            } else {
+                "announced_date_first".to_string()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn arxiv_proxy_url() -> Option<String> {
+    ["ARXIV_PROXY", "ARXIV_HTTPS_PROXY"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// Convert user-entered plain keywords into explicit arXiv API syntax.
@@ -404,6 +529,116 @@ fn parse_atom_entries(xml: &str) -> Vec<ArxivResult> {
         })
         .filter(|paper| !paper.title.is_empty())
         .collect()
+}
+
+fn parse_search_html_results(html: &str) -> Vec<ArxivResult> {
+    let result_re = Regex::new(r#"(?s)<li class="arxiv-result">(.*?)</li>"#)
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let abs_re =
+        Regex::new(r#"(?s)<p class="list-title[^"]*"[^>]*>\s*<a href="([^"]+)">arXiv:([^<]+)</a>"#)
+            .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let pdf_re = Regex::new(r#"(?s)<a href="([^"]+)">pdf</a>"#)
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let title_re = Regex::new(r#"(?s)<p class="title is-5 mathjax">\s*(.*?)\s*</p>"#)
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let authors_re = Regex::new(r#"(?s)<p class="authors">\s*(.*?)\s*</p>"#)
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let abstract_re =
+        Regex::new(r#"(?s)<span class="abstract-full[^"]*"[^>]*>\s*(.*?)\s*<a class="is-size-7""#)
+            .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let date_re = Regex::new(r#"(?s)<p class="is-size-7">(.*?)</p>"#)
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+    let year_re = Regex::new(r"\b((?:19|20)\d{2})\b")
+        .unwrap_or_else(|_| Regex::new("$^").expect("regex fallback"));
+
+    result_re
+        .captures_iter(html)
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str()))
+        .filter_map(|entry| {
+            let abs_caps = abs_re.captures(entry)?;
+            let url = abs_caps
+                .get(1)
+                .map(|m| absolute_arxiv_url(m.as_str()))
+                .unwrap_or_default();
+            let arxiv_id = abs_caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+            let pdf_url = capture_first_raw(&pdf_re, entry)
+                .map(|url| absolute_arxiv_url(&url))
+                .unwrap_or_default();
+            let title = capture_first_raw(&title_re, entry)
+                .map(|text| clean_html_text(&text))
+                .unwrap_or_default();
+            if title.is_empty() {
+                return None;
+            }
+            let authors = capture_first_raw(&authors_re, entry)
+                .map(|text| {
+                    clean_html_text(&text)
+                        .trim_start_matches("Authors:")
+                        .trim()
+                        .to_string()
+                })
+                .unwrap_or_default();
+            let abstract_text = capture_first_raw(&abstract_re, entry)
+                .map(|text| clean_html_text(&text))
+                .unwrap_or_default();
+            let year = capture_first_raw(&date_re, entry)
+                .and_then(|text| capture_first_raw(&year_re, &text))
+                .unwrap_or_else(|| year_from_arxiv_id(arxiv_id));
+
+            Some(ArxivResult {
+                title,
+                authors,
+                year,
+                doi: String::new(),
+                url,
+                pdf_url,
+                abstract_text,
+            })
+        })
+        .collect()
+}
+
+fn capture_first_raw(re: &Regex, text: &str) -> Option<String> {
+    re.captures(text)
+        .and_then(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+}
+
+fn absolute_arxiv_url(value: &str) -> String {
+    let decoded = decode_html_entities(value.trim());
+    if decoded.starts_with("http://") || decoded.starts_with("https://") {
+        decoded
+    } else {
+        format!("https://arxiv.org{decoded}")
+    }
+}
+
+fn clean_html_text(text: &str) -> String {
+    decode_html_entities(&strip_tags(text))
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn decode_html_entities(input: &str) -> String {
+    decode_xml_entities(input)
+        .replace("&nbsp;", " ")
+        .replace("&hellip;", "...")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+}
+
+fn year_from_arxiv_id(arxiv_id: &str) -> String {
+    let Some(prefix) = arxiv_id.get(0..2) else {
+        return String::new();
+    };
+    let Ok(year) = prefix.parse::<u32>() else {
+        return String::new();
+    };
+    if year >= 91 {
+        format!("19{year:02}")
+    } else {
+        format!("20{year:02}")
+    }
 }
 
 fn extract_link_urls(entry: &str, link_re: &Regex) -> (String, String) {
@@ -546,5 +781,45 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].url, "https://arxiv.org/abs/2501.02842v1");
         assert_eq!(parsed[0].pdf_url, "https://arxiv.org/pdf/2501.02842v1");
+    }
+
+    #[test]
+    fn test_parse_search_html_results() {
+        let html = r#"
+<ol>
+  <li class="arxiv-result">
+    <p class="list-title is-inline-block"><a href="https://arxiv.org/abs/2605.06641">arXiv:2605.06641</a>
+      <span>[<a href="https://arxiv.org/pdf/2605.06641">pdf</a>]</span>
+    </p>
+    <p class="title is-5 mathjax">
+      GlazyBench: A Benchmark for Ceramic Glaze Property Prediction
+    </p>
+    <p class="authors">
+      <span>Authors:</span>
+      <a href="/search/?searchtype=author&amp;query=Zhai%2C+Z">Ziyu Zhai</a>,
+      <a href="/search/?searchtype=author&amp;query=Li%2C+S">Siyou Li</a>
+    </p>
+    <p class="abstract mathjax">
+      <span class="abstract-full has-text-grey-dark mathjax" id="2605.06641v1-abstract-full" style="display: none;">
+        Developing ceramic glazes with <span class="search-hit">machine</span> learning.
+        <a class="is-size-7">Less</a>
+      </span>
+    </p>
+    <p class="is-size-7"><span>Submitted</span> 7 May, 2026;</p>
+  </li>
+</ol>
+        "#;
+
+        let parsed = parse_search_html_results(html);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].title,
+            "GlazyBench: A Benchmark for Ceramic Glaze Property Prediction"
+        );
+        assert_eq!(parsed[0].authors, "Ziyu Zhai, Siyou Li");
+        assert_eq!(parsed[0].year, "2026");
+        assert_eq!(parsed[0].url, "https://arxiv.org/abs/2605.06641");
+        assert_eq!(parsed[0].pdf_url, "https://arxiv.org/pdf/2605.06641");
+        assert!(parsed[0].abstract_text.contains("machine learning"));
     }
 }
