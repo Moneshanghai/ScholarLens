@@ -128,7 +128,7 @@ async function parseAdminResponse(response, fallbackMessage) {
     const looksLikeHtml = contentType.includes('text/html') || raw.trimStart().startsWith('<!DOCTYPE html');
 
     if (looksLikeHtml) {
-        throw new Error('管理接口未启用或请求被前端页面接管。请在 config.toml 的 [server] 中设置 admin_enabled = true，重启服务后再试。');
+        throw new Error('管理接口未启用或不可用。');
     }
 
     let payload = {};
@@ -139,7 +139,7 @@ async function parseAdminResponse(response, fallbackMessage) {
     }
 
     if (response.status === 401) {
-        throw new Error('Admin API Key 缺失或不正确。请粘贴 init-admin 生成的管理员 key。');
+        throw new Error('管理员密码缺失或不正确。');
     }
 
     if (response.status === 403) {

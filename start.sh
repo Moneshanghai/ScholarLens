@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-3000}"
+export SCHOLARLENS_ADMIN_PASSWORD="${SCHOLARLENS_ADMIN_PASSWORD:-123456}"
 FRONTEND_DIR="$SCRIPT_DIR/front"
 DIST_DIR="$FRONTEND_DIR/dist"
 

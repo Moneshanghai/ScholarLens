@@ -80,6 +80,8 @@ pub struct Task {
     pub created_at: u64,
     /// Completion timestamp (Unix epoch seconds) - for TTL cleanup
     pub completed_at: Option<u64>,
+    /// Last user access timestamp (Unix epoch seconds) for cloud result retention.
+    pub last_accessed_at: u64,
     /// Estimated time to completion in seconds
     pub eta_seconds: Option<u64>,
 }
@@ -101,6 +103,7 @@ impl Task {
             error: None,
             created_at,
             completed_at: None,
+            last_accessed_at: created_at,
             eta_seconds: Some(120), // Default ETA: 2 minutes
         }
     }
@@ -120,6 +123,7 @@ impl Task {
             error: None,
             created_at,
             completed_at: None,
+            last_accessed_at: created_at,
             eta_seconds: Some(120),
         }
     }
@@ -160,6 +164,7 @@ impl Task {
             } else {
                 None
             },
+            last_accessed_at: db_task.last_accessed_at as u64,
             eta_seconds: None,
         }
     }
@@ -175,31 +180,35 @@ impl Task {
 
     /// Mark as completed with result
     pub fn complete(&mut self, result: TaskResult) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         self.status = TaskStatus::Completed;
         self.progress.step = "Completed".to_string();
         self.progress.percent = 100;
         self.result = Some(result);
         self.eta_seconds = Some(0);
-        self.completed_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        );
+        self.completed_at = Some(now);
+        self.last_accessed_at = now;
     }
 
     /// Mark as failed with error
     pub fn fail(&mut self, error: String) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         self.status = TaskStatus::Failed;
         self.progress.step = "Failed".to_string();
         self.error = Some(error);
         self.eta_seconds = Some(0);
-        self.completed_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        );
+        self.completed_at = Some(now);
+        self.last_accessed_at = now;
+    }
+
+    pub fn touch_accessed_at(&mut self, timestamp: u64) {
+        self.last_accessed_at = timestamp;
     }
 }
 
@@ -266,7 +275,7 @@ impl TaskStore {
         self.tasks.is_empty()
     }
 
-    /// Cleanup completed/failed tasks based on TTL after completion
+    /// Cleanup completed/failed tasks based on TTL after last access.
     ///
     /// Running tasks are never cleaned up (they're still executing).
     /// Only completed or failed tasks are removed after ttl_secs from completion.
@@ -283,13 +292,10 @@ impl TaskStore {
                 return true;
             }
 
-            // For completed/failed tasks, check TTL from completion time
-            if let Some(completed_at) = task.completed_at {
-                let age = now.saturating_sub(completed_at);
-                if age >= ttl_secs {
-                    removed += 1;
-                    return false;
-                }
+            let age = now.saturating_sub(task.last_accessed_at);
+            if age >= ttl_secs {
+                removed += 1;
+                return false;
             }
             true
         });

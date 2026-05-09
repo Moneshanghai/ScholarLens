@@ -181,6 +181,26 @@ async fn get_task_with_fallback(
     }
 }
 
+async fn touch_task_access(state: &AppState, task_id: &str) {
+    let now = chrono::Utc::now().timestamp();
+    let task_id_for_db = task_id.to_string();
+    if let Err(error) = state
+        .run_db(move |conn| db_tasks::touch_last_accessed_at(conn, &task_id_for_db, now))
+        .await
+    {
+        warn!(
+            task_id = %task_id,
+            error = %error,
+            "Failed to refresh task access time"
+        );
+    }
+
+    let now_for_memory = now.max(0) as u64;
+    state.task_store.update(task_id, |task| {
+        task.touch_accessed_at(now_for_memory);
+    });
+}
+
 fn task_summary_from_db_task(task: db_tasks::Task) -> TaskSummaryResponse {
     TaskSummaryResponse {
         task_id: task.id,
@@ -386,6 +406,7 @@ pub async fn task_status_handler(
     Path(task_id): Path<String>,
 ) -> Result<Json<TaskResponse>, (StatusCode, Json<ApiError>)> {
     let task = get_task_with_fallback(&state, &task_id).await?;
+    touch_task_access(&state, &task_id).await;
 
     let result = task.result.map(|r| TaskResultResponse {
         total_papers: r.total_papers,
@@ -424,6 +445,7 @@ pub async fn task_download_handler(
     Path(task_id): Path<String>,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
     let task = get_task_with_fallback(&state, &task_id).await?;
+    touch_task_access(&state, &task_id).await;
 
     if task.status != TaskStatus::Completed {
         return Err((
@@ -489,6 +511,7 @@ pub async fn task_bibtex_handler(
     Path(task_id): Path<String>,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
     let task = get_task_with_fallback(&state, &task_id).await?;
+    touch_task_access(&state, &task_id).await;
 
     if task.status != TaskStatus::Completed {
         return Err((

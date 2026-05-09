@@ -111,6 +111,33 @@ pub fn create(
     is_admin: bool,
     rate_limit_rps: u32,
 ) -> Result<ApiKeyCreated> {
+    let (key, key_hash) = generate_key();
+    insert_key(conn, name, is_admin, rate_limit_rps, key, key_hash)
+}
+
+/// Create a new API key using a caller-provided plaintext value.
+pub fn create_with_key(
+    conn: &Connection,
+    name: &str,
+    is_admin: bool,
+    rate_limit_rps: u32,
+    plaintext_key: &str,
+) -> Result<ApiKeyCreated> {
+    let normalized_key = plaintext_key.trim();
+    validate_custom_key(normalized_key)?;
+    let key = SecretString::from(normalized_key.to_string());
+    let key_hash = hash_key(normalized_key);
+    insert_key(conn, name, is_admin, rate_limit_rps, key, key_hash)
+}
+
+fn insert_key(
+    conn: &Connection,
+    name: &str,
+    is_admin: bool,
+    rate_limit_rps: u32,
+    key: SecretString,
+    key_hash: String,
+) -> Result<ApiKeyCreated> {
     let id = format!(
         "key_{}",
         uuid::Uuid::new_v4()
@@ -119,7 +146,6 @@ pub fn create(
             .next()
             .unwrap_or("")
     );
-    let (key, key_hash) = generate_key();
     let now = chrono::Utc::now().timestamp();
 
     conn.execute(
@@ -142,9 +168,9 @@ pub fn create(
 
 fn validate_custom_key(value: &str) -> Result<()> {
     let trimmed = value.trim();
-    if trimmed.len() < 8 {
+    if trimmed.len() < 6 {
         return Err(GscholarError::Validation(
-            "New Admin API Key must be at least 8 characters.".to_string(),
+            "New Admin API Key must be at least 6 characters.".to_string(),
         ));
     }
     if trimmed.len() > 128 {
@@ -183,6 +209,44 @@ pub fn replace_key(conn: &Connection, current_key: &str, new_key: &str) -> Resul
     .map_err(|e| GscholarError::Database(format!("Replace key failed: {}", e)))?;
 
     get_by_id(conn, &current.id)
+}
+
+/// Create or replace the primary administrator key with a deployment-provided value.
+pub fn set_admin_key(
+    conn: &Connection,
+    name: &str,
+    plaintext_key: &str,
+    rate_limit_rps: u32,
+) -> Result<ApiKey> {
+    let normalized_key = plaintext_key.trim();
+    validate_custom_key(normalized_key)?;
+    let key_hash = hash_key(normalized_key);
+
+    let existing_id = conn
+        .query_row(
+            "SELECT id FROM api_keys WHERE is_admin = 1 ORDER BY created_at ASC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| GscholarError::Database(format!("Find admin key failed: {}", e)))?;
+
+    if let Some(id) = existing_id {
+        conn.execute(
+            "UPDATE api_keys
+             SET key_hash = ?1, name = ?2, rate_limit_rps = ?3, request_count = 0, last_used_at = NULL
+             WHERE id = ?4",
+            params![key_hash, name, rate_limit_rps as i32, id],
+        )
+        .map_err(|e| GscholarError::Database(format!("Set admin key failed: {}", e)))?;
+
+        return get_by_id(conn, &id)?
+            .ok_or_else(|| GscholarError::Database("Admin key missing after update".to_string()));
+    }
+
+    let created = create_with_key(conn, name, true, rate_limit_rps, normalized_key)?;
+    get_by_id(conn, &created.id)?
+        .ok_or_else(|| GscholarError::Database("Admin key missing after create".to_string()))
 }
 
 /// Validate an API key and return key info if valid
@@ -370,6 +434,51 @@ mod tests {
         let key = validated.expect("key");
         assert_eq!(key.name, "Test Key");
         assert!(!key.is_admin);
+    }
+
+    #[test]
+    fn test_create_with_custom_key_validates_exact_value() {
+        let conn = setup_db();
+        let custom_key = "deploy-admin-password-2026";
+
+        let created =
+            create_with_key(&conn, "Admin", true, 1000, custom_key).expect("create custom admin");
+
+        assert_eq!(created.key.expose_secret(), custom_key);
+        let validated = validate(&conn, custom_key)
+            .expect("validate custom")
+            .expect("custom key should validate");
+        assert_eq!(validated.id, created.id);
+        assert!(validated.is_admin);
+    }
+
+    #[test]
+    fn test_create_with_custom_key_rejects_weak_values() {
+        let conn = setup_db();
+
+        let error = create_with_key(&conn, "Admin", true, 1000, "short")
+            .expect_err("short custom key should fail");
+
+        assert!(matches!(error, GscholarError::Validation(_)));
+        assert!(!has_admin_key(&conn).expect("check admin"));
+    }
+
+    #[test]
+    fn test_set_admin_key_replaces_existing_admin_password() {
+        let conn = setup_db();
+        let created = create(&conn, "Admin", true, 1000).expect("create admin");
+        let old_key = created.key.expose_secret().to_string();
+
+        let updated = set_admin_key(&conn, "Admin", "123456", 1000).expect("set admin");
+
+        assert_eq!(updated.id, created.id);
+        assert!(validate(&conn, &old_key).expect("validate old").is_none());
+        assert!(
+            validate(&conn, "123456")
+                .expect("validate new")
+                .expect("new admin should validate")
+                .is_admin
+        );
     }
 
     #[test]

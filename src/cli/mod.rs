@@ -99,6 +99,10 @@ pub enum Commands {
         /// Name for the admin key
         #[arg(long, default_value = "Admin")]
         name: String,
+
+        /// Custom administrator password/API key. If omitted, the default initial password is used.
+        #[arg(long)]
+        key: Option<String>,
     },
 }
 
@@ -156,6 +160,31 @@ impl SearchArgs {
             sci_up_top,
             sci_base,
             sci_up,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_init_admin_accepts_custom_key_argument() {
+        let cli = Cli::parse_from([
+            "ScholarLens",
+            "init-admin",
+            "--name",
+            "Admin",
+            "--key",
+            "deploy-admin-password-2026",
+        ]);
+
+        match cli.command {
+            Commands::InitAdmin { name, key } => {
+                assert_eq!(name, "Admin");
+                assert_eq!(key.as_deref(), Some("deploy-admin-password-2026"));
+            }
+            _ => panic!("expected init-admin command"),
         }
     }
 }

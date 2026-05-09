@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Port = if ($env:PORT) { $env:PORT } else { "3000" }
+$env:SCHOLARLENS_ADMIN_PASSWORD = if ($env:SCHOLARLENS_ADMIN_PASSWORD) { $env:SCHOLARLENS_ADMIN_PASSWORD } else { "123456" }
 $FrontDir = Join-Path $ScriptDir "front"
 $DistDir = Join-Path $FrontDir "dist"
 

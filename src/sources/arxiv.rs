@@ -24,6 +24,7 @@ const ARXIV_API_URLS: [&str; 2] = [
 ];
 const ARXIV_HTML_SEARCH_URL: &str = "https://arxiv.org/search/";
 const ARXIV_MAX_PER_REQUEST: usize = 2000;
+const ARXIV_RELAXED_SEARCH_THRESHOLD: usize = 20;
 const ARXIV_USER_AGENT: &str =
     "ScholarLens/0.1 (https://github.com/Moneshanghai/ScholarLens; arxiv source)";
 static ARXIV_SERIAL_REQUEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -72,22 +73,57 @@ pub struct ArxivResult {
 
 /// arXiv provider implementing the unified source trait.
 pub struct ArxivProvider {
+    clients: Vec<ArxivHttpClient>,
+}
+
+struct ArxivHttpClient {
+    route: ArxivNetworkRoute,
     client: Client,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ArxivNetworkRoute {
+    Direct,
+    Proxy(String),
+}
+
+impl ArxivNetworkRoute {
+    fn label(&self) -> &str {
+        match self {
+            Self::Direct => "direct",
+            Self::Proxy(proxy_url) => proxy_url.as_str(),
+        }
+    }
 }
 
 impl ArxivProvider {
     pub fn new(timeout_secs: u64) -> Result<Self> {
-        let mut builder = Client::builder()
-            .timeout(Duration::from_secs(timeout_secs))
-            .user_agent(ARXIV_USER_AGENT);
+        let mut clients = Vec::new();
+        let routes = arxiv_network_routes();
 
-        if let Some(proxy_url) = arxiv_proxy_url() {
-            builder = builder.proxy(Proxy::all(proxy_url)?);
-            info!("arXiv proxy enabled from ARXIV_PROXY/ARXIV_HTTPS_PROXY");
+        for route in routes {
+            match build_arxiv_client(timeout_secs, &route) {
+                Ok(client) => {
+                    info!(route = route.label(), "arXiv network route prepared");
+                    clients.push(ArxivHttpClient { route, client });
+                }
+                Err(error) => {
+                    warn!(
+                        route = route.label(),
+                        error = %error,
+                        "Skipping invalid arXiv network route"
+                    );
+                }
+            }
         }
 
-        let client = builder.build()?;
-        Ok(Self { client })
+        if clients.is_empty() {
+            return Err(GscholarError::Config(
+                "No usable arXiv network routes could be created".to_string(),
+            ));
+        }
+
+        Ok(Self { clients })
     }
 }
 
@@ -98,7 +134,7 @@ impl SourceProvider<ArxivQueryOptions> for ArxivProvider {
     }
 
     async fn search(&self, query: &str, options: &ArxivQueryOptions) -> Result<Vec<SourcePaper>> {
-        let papers = search_with_client(&self.client, query, options).await?;
+        let papers = search_with_route_clients(&self.clients, query, options).await?;
         Ok(papers
             .into_iter()
             .map(|p| SourcePaper {
@@ -119,7 +155,111 @@ impl SourceProvider<ArxivQueryOptions> for ArxivProvider {
 /// Search arXiv and return normalized results.
 pub async fn search_papers(query: &str, options: &ArxivQueryOptions) -> Result<Vec<ArxivResult>> {
     let provider = ArxivProvider::new(options.timeout_secs)?;
-    search_with_client(&provider.client, query, options).await
+    search_with_route_clients(&provider.clients, query, options).await
+}
+
+async fn search_with_route_clients(
+    clients: &[ArxivHttpClient],
+    query: &str,
+    options: &ArxivQueryOptions,
+) -> Result<Vec<ArxivResult>> {
+    let mut last_error = None;
+
+    for candidate in clients {
+        info!(
+            route = candidate.route.label(),
+            query = query,
+            "Trying arXiv network route"
+        );
+        match search_with_client(&candidate.client, query, options).await {
+            Ok(papers) => {
+                info!(
+                    route = candidate.route.label(),
+                    papers = papers.len(),
+                    "arXiv network route succeeded"
+                );
+                return Ok(papers);
+            }
+            Err(error) => {
+                warn!(
+                    route = candidate.route.label(),
+                    error = %error,
+                    "arXiv network route failed"
+                );
+                last_error = Some(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| GscholarError::Api {
+        code: 0,
+        message: "No arXiv network route was available".to_string(),
+    }))
+}
+
+fn build_arxiv_client(timeout_secs: u64, route: &ArxivNetworkRoute) -> Result<Client> {
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .user_agent(ARXIV_USER_AGENT);
+
+    if let ArxivNetworkRoute::Proxy(proxy_url) = route {
+        builder = builder.proxy(Proxy::all(proxy_url)?);
+    }
+
+    Ok(builder.build()?)
+}
+
+fn arxiv_network_routes() -> Vec<ArxivNetworkRoute> {
+    arxiv_network_routes_from_configured(arxiv_configured_proxy_urls())
+}
+
+fn arxiv_network_routes_from_configured(
+    configured_proxy_urls: Vec<String>,
+) -> Vec<ArxivNetworkRoute> {
+    let mut routes = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    push_arxiv_route(&mut routes, &mut seen, ArxivNetworkRoute::Direct);
+    for proxy_url in configured_proxy_urls {
+        push_arxiv_route(&mut routes, &mut seen, ArxivNetworkRoute::Proxy(proxy_url));
+    }
+    for proxy_url in default_local_arxiv_proxy_urls() {
+        push_arxiv_route(
+            &mut routes,
+            &mut seen,
+            ArxivNetworkRoute::Proxy(proxy_url.to_string()),
+        );
+    }
+
+    routes
+}
+
+fn push_arxiv_route(
+    routes: &mut Vec<ArxivNetworkRoute>,
+    seen: &mut std::collections::HashSet<ArxivNetworkRoute>,
+    route: ArxivNetworkRoute,
+) {
+    if seen.insert(route.clone()) {
+        routes.push(route);
+    }
+}
+
+fn arxiv_configured_proxy_urls() -> Vec<String> {
+    ["ARXIV_PROXY", "ARXIV_HTTPS_PROXY"]
+        .iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn default_local_arxiv_proxy_urls() -> [&'static str; 4] {
+    [
+        "socks5h://127.0.0.1:10808",
+        "http://127.0.0.1:10808",
+        "http://127.0.0.1:7890",
+        "socks5h://127.0.0.1:7890",
+    ]
 }
 
 async fn search_with_client(
@@ -154,12 +294,77 @@ async fn search_api_with_client(
     query: &str,
     options: &ArxivQueryOptions,
 ) -> Result<Vec<ArxivResult>> {
+    search_api_with_endpoints(client, query, options, &ARXIV_API_URLS).await
+}
+
+async fn search_api_with_endpoints(
+    client: &Client,
+    query: &str,
+    options: &ArxivQueryOptions,
+    endpoints: &[&str],
+) -> Result<Vec<ArxivResult>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
 
     let search_query = build_search_query(query);
     let max_results = options.max_results.max(1);
+    let mut out = search_api_query(
+        client,
+        endpoints,
+        query,
+        &search_query,
+        options,
+        max_results,
+    )
+    .await?;
+
+    if out.len() < max_results.min(ARXIV_RELAXED_SEARCH_THRESHOLD) {
+        for relaxed_query in build_relaxed_search_queries(query) {
+            if out.len() >= max_results {
+                break;
+            }
+            let remaining = max_results - out.len();
+            match search_api_query(client, endpoints, query, &relaxed_query, options, remaining)
+                .await
+            {
+                Ok(extra) => {
+                    let fetched = extra.len();
+                    let added = append_arxiv_results_dedup(&mut out, extra);
+                    info!(
+                        query = query,
+                        relaxed_query = %relaxed_query,
+                        fetched = fetched,
+                        added = added,
+                        total = out.len(),
+                        "arXiv relaxed query completed"
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        query = query,
+                        relaxed_query = %relaxed_query,
+                        error = %error,
+                        "arXiv relaxed query failed"
+                    );
+                }
+            }
+        }
+    }
+
+    out.truncate(max_results);
+    info!(total = out.len(), "arXiv search completed");
+    Ok(out)
+}
+
+async fn search_api_query(
+    client: &Client,
+    endpoints: &[&str],
+    query: &str,
+    search_query: &str,
+    options: &ArxivQueryOptions,
+    max_results: usize,
+) -> Result<Vec<ArxivResult>> {
     let page_size = options.page_size.clamp(1, ARXIV_MAX_PER_REQUEST);
 
     info!(
@@ -180,7 +385,7 @@ async fn search_api_with_client(
         let batch_size = remaining.min(page_size);
 
         let params = [
-            ("search_query", search_query.clone()),
+            ("search_query", search_query.to_string()),
             ("start", start.to_string()),
             ("max_results", batch_size.to_string()),
             ("sortBy", options.sort_by.clone()),
@@ -191,7 +396,7 @@ async fn search_api_with_client(
         let mut last_error = None;
         let mut rate_limited_after_secs = None;
 
-        for endpoint in ARXIV_API_URLS {
+        for endpoint in endpoints {
             let mut server_error_retries = 0u32;
 
             let page_resp = loop {
@@ -208,7 +413,7 @@ async fn search_api_with_client(
                                 .and_then(|value| value.trim().parse::<u64>().ok())
                                 .unwrap_or(600);
                             last_error = Some("arXiv API rate limited".to_string());
-                            rate_limited_after_secs = Some(600);
+                            rate_limited_after_secs = Some(retry_after);
                             warn!(
                                 source = "arxiv",
                                 endpoint = endpoint,
@@ -267,14 +472,12 @@ async fn search_api_with_client(
                 resp_text = Some(text);
                 break;
             }
-
-            if rate_limited_after_secs.is_some() {
-                break;
-            }
         }
 
-        if let Some(retry_after) = rate_limited_after_secs {
-            return Err(GscholarError::RateLimited(retry_after));
+        if resp_text.is_none() {
+            if let Some(retry_after) = rate_limited_after_secs {
+                return Err(GscholarError::RateLimited(retry_after));
+            }
         }
 
         let resp_text = resp_text.ok_or_else(|| {
@@ -303,7 +506,6 @@ async fn search_api_with_client(
     }
 
     out.truncate(max_results);
-    info!(total = out.len(), "arXiv search completed");
     Ok(out)
 }
 
@@ -392,14 +594,6 @@ fn html_search_order(options: &ArxivQueryOptions) -> String {
     }
 }
 
-fn arxiv_proxy_url() -> Option<String> {
-    ["ARXIV_PROXY", "ARXIV_HTTPS_PROXY"]
-        .iter()
-        .find_map(|key| std::env::var(key).ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
 /// Convert user-entered plain keywords into explicit arXiv API syntax.
 ///
 /// arXiv treats whitespace in a raw query as OR. For a normal search box, users
@@ -416,17 +610,63 @@ pub fn build_search_query(query: &str) -> String {
         return trimmed.to_string();
     }
 
-    terms
+    build_terms_query(&terms, " AND ")
+}
+
+fn build_relaxed_search_queries(query: &str) -> Vec<String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() || looks_like_advanced_arxiv_query(trimmed) {
+        return Vec::new();
+    }
+
+    let terms = plain_query_terms(trimmed);
+    if terms.len() < 2 {
+        return Vec::new();
+    }
+
+    let strict_query = build_terms_query(&terms, " AND ");
+    let mut queries = Vec::new();
+
+    for keep_count in (2..terms.len()).rev() {
+        queries.push(build_terms_query(&terms[..keep_count], " AND "));
+    }
+
+    let phrase_chunks = terms
+        .chunks(2)
+        .map(|chunk| chunk.join(" "))
+        .collect::<Vec<_>>();
+    if phrase_chunks.len() > 1 {
+        queries.push(build_terms_query(&phrase_chunks, " OR "));
+    }
+
+    queries.push(build_terms_query(&terms, " OR "));
+    queries.push(trimmed.to_string());
+    unique_queries_excluding(queries, &strict_query)
+}
+
+fn unique_queries_excluding(queries: Vec<String>, excluded: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    queries
         .into_iter()
-        .map(|term| {
-            if term.chars().any(char::is_whitespace) {
-                format!("all:\"{}\"", term.replace('"', "\\\""))
-            } else {
-                format!("all:{term}")
-            }
-        })
+        .filter(|query| !query.is_empty() && query != excluded)
+        .filter(|query| seen.insert(query.clone()))
+        .collect()
+}
+
+fn build_terms_query(terms: &[String], separator: &str) -> String {
+    terms
+        .iter()
+        .map(|term| format_arxiv_all_term(term))
         .collect::<Vec<_>>()
-        .join(" AND ")
+        .join(separator)
+}
+
+fn format_arxiv_all_term(term: &str) -> String {
+    if term.chars().any(char::is_whitespace) {
+        format!("all:\"{}\"", term.replace('"', "\\\""))
+    } else {
+        format!("all:{term}")
+    }
 }
 
 fn looks_like_advanced_arxiv_query(query: &str) -> bool {
@@ -641,6 +881,71 @@ fn year_from_arxiv_id(arxiv_id: &str) -> String {
     }
 }
 
+fn append_arxiv_results_dedup(base: &mut Vec<ArxivResult>, additional: Vec<ArxivResult>) -> usize {
+    let mut url_set = base
+        .iter()
+        .filter_map(|paper| normalize_arxiv_url_for_dedup(&paper.url))
+        .collect::<std::collections::HashSet<_>>();
+    let mut title_set = base
+        .iter()
+        .filter_map(|paper| normalize_arxiv_title_for_dedup(&paper.title))
+        .collect::<std::collections::HashSet<_>>();
+    let mut added = 0usize;
+
+    for paper in additional {
+        let url_key = normalize_arxiv_url_for_dedup(&paper.url);
+        let title_key = normalize_arxiv_title_for_dedup(&paper.title);
+        let duplicated = url_key
+            .as_ref()
+            .map(|url| url_set.contains(url))
+            .unwrap_or(false)
+            || title_key
+                .as_ref()
+                .map(|title| title_set.contains(title))
+                .unwrap_or(false);
+        if duplicated {
+            continue;
+        }
+
+        if let Some(url) = url_key {
+            url_set.insert(url);
+        }
+        if let Some(title) = title_key {
+            title_set.insert(title);
+        }
+        base.push(paper);
+        added += 1;
+    }
+
+    added
+}
+
+fn normalize_arxiv_url_for_dedup(url: &str) -> Option<String> {
+    let normalized = url
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".pdf")
+        .to_lowercase();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn normalize_arxiv_title_for_dedup(title: &str) -> Option<String> {
+    let normalized = title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
 fn extract_link_urls(entry: &str, link_re: &Regex) -> (String, String) {
     let mut alt_url = String::new();
     let mut pdf_url = String::new();
@@ -714,6 +1019,8 @@ fn decode_xml_entities(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{extract::Query, http::header::CONTENT_TYPE, response::IntoResponse, routing::get};
+    use std::collections::HashMap;
 
     #[test]
     fn test_parse_atom_entries() {
@@ -759,6 +1066,166 @@ mod tests {
     fn test_build_search_query_preserves_advanced_arxiv_query() {
         let query = build_search_query(r#"ti:"machine learning" AND cat:cs.LG"#);
         assert_eq!(query, r#"ti:"machine learning" AND cat:cs.LG"#);
+    }
+
+    #[test]
+    fn test_relaxed_search_queries_for_sparse_plain_query() {
+        let queries = build_relaxed_search_queries("ceramic glaze property prediction");
+
+        assert!(queries.contains(&"all:ceramic AND all:glaze AND all:property".to_string()));
+        assert!(queries.contains(&"all:ceramic AND all:glaze".to_string()));
+        assert!(
+            queries.contains(&r#"all:"ceramic glaze" OR all:"property prediction""#.to_string())
+        );
+        assert!(queries.contains(&"ceramic glaze property prediction".to_string()));
+        assert!(!queries.contains(&build_search_query("ceramic glaze property prediction")));
+    }
+
+    #[test]
+    fn test_append_arxiv_results_dedup() {
+        let mut base = vec![ArxivResult {
+            title: "A Sparse arXiv Result".to_string(),
+            url: "https://arxiv.org/abs/2605.06641".to_string(),
+            ..Default::default()
+        }];
+        let added = append_arxiv_results_dedup(
+            &mut base,
+            vec![
+                ArxivResult {
+                    title: "A Sparse arXiv Result".to_string(),
+                    url: "https://arxiv.org/abs/2605.06641".to_string(),
+                    ..Default::default()
+                },
+                ArxivResult {
+                    title: "A Relaxed arXiv Result".to_string(),
+                    url: "https://arxiv.org/abs/2605.06642".to_string(),
+                    ..Default::default()
+                },
+            ],
+        );
+
+        assert_eq!(added, 1);
+        assert_eq!(base.len(), 2);
+    }
+
+    #[test]
+    fn test_arxiv_network_routes_try_direct_then_local_proxy_ports() {
+        let routes = arxiv_network_routes_from_configured(vec![
+            "http://127.0.0.1:10808".to_string(),
+            "http://custom-proxy.local:8080".to_string(),
+        ]);
+
+        assert_eq!(
+            routes,
+            vec![
+                ArxivNetworkRoute::Direct,
+                ArxivNetworkRoute::Proxy("http://127.0.0.1:10808".to_string()),
+                ArxivNetworkRoute::Proxy("http://custom-proxy.local:8080".to_string()),
+                ArxivNetworkRoute::Proxy("socks5h://127.0.0.1:10808".to_string()),
+                ArxivNetworkRoute::Proxy("http://127.0.0.1:7890".to_string()),
+                ArxivNetworkRoute::Proxy("socks5h://127.0.0.1:7890".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sparse_query_is_expanded_with_relaxed_api_results() {
+        let endpoint = spawn_arxiv_api_stub().await;
+        let endpoint_ref = endpoint.as_str();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("test client");
+        let options = ArxivQueryOptions {
+            max_results: 10,
+            page_size: 10,
+            sort_by: "relevance".to_string(),
+            sort_order: "descending".to_string(),
+            timeout_secs: 10,
+            request_delay_ms: 0,
+        };
+
+        let results = search_api_with_endpoints(
+            &client,
+            "ceramic glaze property prediction",
+            &options,
+            &[endpoint_ref],
+        )
+        .await
+        .expect("stubbed arxiv search");
+
+        assert_eq!(results.len(), 6);
+        assert_eq!(results[0].title, "Strict Ceramic Glaze Property Prediction");
+        assert!(results
+            .iter()
+            .any(|paper| paper.title == "Relaxed Ceramic Glaze Result 5"));
+    }
+
+    async fn spawn_arxiv_api_stub() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind arxiv stub");
+        let addr = listener.local_addr().expect("stub local addr");
+        let app = axum::Router::new().route("/api/query", get(arxiv_api_stub_handler));
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve arxiv stub");
+        });
+        format!("http://{addr}/api/query")
+    }
+
+    async fn arxiv_api_stub_handler(
+        Query(params): Query<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let search_query = params.get("search_query").cloned().unwrap_or_default();
+        let max_results = params
+            .get("max_results")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(10);
+
+        let entries =
+            if search_query == "all:ceramic AND all:glaze AND all:property AND all:prediction" {
+                vec![stub_entry(
+                    "2605.06641",
+                    "Strict Ceramic Glaze Property Prediction",
+                )]
+            } else if search_query == "all:ceramic OR all:glaze OR all:property OR all:prediction"
+                || search_query == "ceramic glaze property prediction"
+            {
+                (1..=5)
+                    .map(|idx| {
+                        stub_entry(
+                            &format!("2605.0764{idx}"),
+                            &format!("Relaxed Ceramic Glaze Result {idx}"),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+        let limited_entries = entries.into_iter().take(max_results).collect::<Vec<_>>();
+        let body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+{}
+</feed>"#,
+            limited_entries.join("\n")
+        );
+
+        ([(CONTENT_TYPE, "application/atom+xml")], body)
+    }
+
+    fn stub_entry(id: &str, title: &str) -> String {
+        format!(
+            r#"<entry>
+  <id>https://arxiv.org/abs/{id}</id>
+  <published>2026-05-09T00:00:00Z</published>
+  <title>{title}</title>
+  <summary>Stub abstract.</summary>
+  <author><name>Alice Example</name></author>
+  <link href="https://arxiv.org/abs/{id}" rel="alternate" type="text/html"/>
+  <link href="https://arxiv.org/pdf/{id}" rel="related" type="application/pdf" title="pdf"/>
+</entry>"#
+        )
     }
 
     #[test]

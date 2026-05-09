@@ -87,9 +87,9 @@ async fn main() -> Result<()> {
             info!(port = ?port, host = ?host, serve_static = ?serve_static, "Executing server command");
             cli::run_api_server(port, host, serve_static).await
         }
-        cli::Commands::InitAdmin { name } => {
+        cli::Commands::InitAdmin { name, key } => {
             info!(name = %name, "Executing init-admin command");
-            cli::init_admin_key(&name).await
+            cli::init_admin_key(&name, key.as_deref()).await
         }
     }
 }

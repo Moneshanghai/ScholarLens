@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     keyword TEXT,
     source TEXT,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    last_accessed_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -118,7 +119,39 @@ pub fn init_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA_SQL)
         .map_err(|e| GscholarError::Database(format!("Failed to init schema: {}", e)))?;
 
+    ensure_tasks_last_accessed_at(conn)?;
+
     debug!("Database schema initialized with WAL mode");
+    Ok(())
+}
+
+fn ensure_tasks_last_accessed_at(conn: &Connection) -> Result<()> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(tasks)")
+        .map_err(|e| GscholarError::Database(format!("Failed to inspect tasks table: {}", e)))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| GscholarError::Database(format!("Failed to read tasks columns: {}", e)))?;
+    let has_last_accessed = columns
+        .filter_map(|column| column.ok())
+        .any(|column| column == "last_accessed_at");
+
+    if !has_last_accessed {
+        conn.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN last_accessed_at INTEGER;
+             UPDATE tasks SET last_accessed_at = COALESCE(updated_at, created_at, strftime('%s','now'));
+             CREATE INDEX IF NOT EXISTS idx_tasks_last_accessed ON tasks(last_accessed_at);",
+        )
+        .map_err(|e| {
+            GscholarError::Database(format!("Failed to migrate tasks last_accessed_at: {}", e))
+        })?;
+    }
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_last_accessed ON tasks(last_accessed_at);",
+    )
+    .map_err(|e| GscholarError::Database(format!("Failed to create last_accessed index: {}", e)))?;
+
     Ok(())
 }
 

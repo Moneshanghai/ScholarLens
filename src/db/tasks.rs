@@ -76,6 +76,13 @@ pub struct Task {
     pub source: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub last_accessed_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpiredTaskRecord {
+    pub task_id: String,
+    pub csv_path: Option<String>,
 }
 
 impl Task {
@@ -92,6 +99,7 @@ impl Task {
             source: Some(source.to_string()),
             created_at: now,
             updated_at: now,
+            last_accessed_at: now,
         }
     }
 }
@@ -104,8 +112,8 @@ pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
         .map(|r| serde_json::to_string(r).unwrap_or_default());
 
     conn.execute(
-        "INSERT INTO tasks (id, status, progress_step, progress_percent, result_json, error, keyword, source, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO tasks (id, status, progress_step, progress_percent, result_json, error, keyword, source, created_at, updated_at, last_accessed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             task.id,
             task.status.as_str(),
@@ -117,6 +125,7 @@ pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
             task.source,
             task.created_at,
             task.updated_at,
+            task.last_accessed_at,
         ],
     ).map_err(|e| GscholarError::Database(format!("Insert task failed: {}", e)))?;
 
@@ -127,7 +136,7 @@ pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
 /// Get a task by ID
 pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<Task>> {
     let task = conn.query_row(
-        "SELECT id, status, progress_step, progress_percent, result_json, error, keyword, source, created_at, updated_at
+        "SELECT id, status, progress_step, progress_percent, result_json, error, keyword, source, created_at, updated_at, last_accessed_at
          FROM tasks WHERE id = ?1",
         params![id],
         |row| {
@@ -147,6 +156,7 @@ pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<Task>> {
                 source: row.get(7)?,
                 created_at: row.get(8)?,
                 updated_at: row.get(9)?,
+                last_accessed_at: row.get(10)?,
             })
         },
     ).optional()
@@ -174,7 +184,7 @@ pub fn complete(conn: &Connection, id: &str, result: &TaskResult) -> Result<()> 
     let result_json = serde_json::to_string(result).unwrap_or_default();
 
     conn.execute(
-        "UPDATE tasks SET status = 'completed', progress_step = 'Completed', progress_percent = 100, result_json = ?1, updated_at = ?2 WHERE id = ?3",
+        "UPDATE tasks SET status = 'completed', progress_step = 'Completed', progress_percent = 100, result_json = ?1, updated_at = ?2, last_accessed_at = ?2 WHERE id = ?3",
         params![result_json, now, id],
     ).map_err(|e| GscholarError::Database(format!("Complete task failed: {}", e)))?;
 
@@ -186,7 +196,7 @@ pub fn fail(conn: &Connection, id: &str, error: &str) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
 
     conn.execute(
-        "UPDATE tasks SET status = 'failed', progress_step = 'Failed', error = ?1, updated_at = ?2 WHERE id = ?3",
+        "UPDATE tasks SET status = 'failed', progress_step = 'Failed', error = ?1, updated_at = ?2, last_accessed_at = ?2 WHERE id = ?3",
         params![error, now, id],
     ).map_err(|e| GscholarError::Database(format!("Fail task failed: {}", e)))?;
 
@@ -226,10 +236,10 @@ pub fn list(
 
     // Query with pagination
     let sql = if status_filter.is_some() {
-        "SELECT id, status, progress_step, progress_percent, result_json, error, keyword, source, created_at, updated_at
+        "SELECT id, status, progress_step, progress_percent, result_json, error, keyword, source, created_at, updated_at, last_accessed_at
          FROM tasks WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
     } else {
-        "SELECT id, status, progress_step, progress_percent, result_json, error, keyword, source, created_at, updated_at
+        "SELECT id, status, progress_step, progress_percent, result_json, error, keyword, source, created_at, updated_at, last_accessed_at
          FROM tasks ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
     };
 
@@ -265,10 +275,22 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         source: row.get(7)?,
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
+        last_accessed_at: row.get(10)?,
     })
 }
 
-/// Cleanup old tasks
+pub fn touch_last_accessed_at(conn: &Connection, id: &str, now: i64) -> Result<bool> {
+    let rows = conn
+        .execute(
+            "UPDATE tasks SET last_accessed_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )
+        .map_err(|e| GscholarError::Database(format!("Touch task access failed: {}", e)))?;
+
+    Ok(rows > 0)
+}
+
+/// Cleanup old tasks by creation time.
 pub fn cleanup(conn: &Connection, ttl_secs: i64) -> Result<usize> {
     let cutoff = chrono::Utc::now().timestamp() - ttl_secs;
 
@@ -277,6 +299,42 @@ pub fn cleanup(conn: &Connection, ttl_secs: i64) -> Result<usize> {
         .map_err(|e| GscholarError::Database(format!("Cleanup failed: {}", e)))?;
 
     Ok(rows)
+}
+
+pub fn cleanup_inactive(conn: &Connection, ttl_secs: i64) -> Result<Vec<ExpiredTaskRecord>> {
+    let cutoff = chrono::Utc::now().timestamp() - ttl_secs;
+    cleanup_inactive_before(conn, cutoff)
+}
+
+pub fn cleanup_inactive_before(conn: &Connection, cutoff: i64) -> Result<Vec<ExpiredTaskRecord>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, result_json FROM tasks
+             WHERE status IN ('completed', 'failed') AND last_accessed_at < ?1",
+        )
+        .map_err(|e| GscholarError::Database(format!("Prepare inactive cleanup failed: {}", e)))?;
+
+    let rows = stmt
+        .query_map(params![cutoff], |row| {
+            let task_id: String = row.get(0)?;
+            let result_json: Option<String> = row.get(1)?;
+            let csv_path = result_json
+                .and_then(|value| serde_json::from_str::<TaskResult>(&value).ok())
+                .and_then(|result| result.csv_path);
+            Ok(ExpiredTaskRecord { task_id, csv_path })
+        })
+        .map_err(|e| GscholarError::Database(format!("Query inactive cleanup failed: {}", e)))?;
+
+    let expired = rows
+        .filter_map(|row| row.ok())
+        .collect::<Vec<ExpiredTaskRecord>>();
+
+    for record in &expired {
+        conn.execute("DELETE FROM tasks WHERE id = ?1", params![record.task_id])
+            .map_err(|e| GscholarError::Database(format!("Delete inactive task failed: {}", e)))?;
+    }
+
+    Ok(expired)
 }
 
 #[cfg(test)]
@@ -336,5 +394,59 @@ mod tests {
         let (tasks, total) = list(&conn, 1, 10, None).expect("list");
         assert_eq!(tasks.len(), 5);
         assert_eq!(total, 5);
+    }
+
+    #[test]
+    fn test_touch_last_accessed_updates_task_access_time() {
+        let conn = setup_db();
+        let mut task = Task::new("machine learning", "combined");
+        task.created_at = 1_700_000_000;
+        task.updated_at = 1_700_000_000;
+        task.last_accessed_at = 1_700_000_000;
+        insert(&conn, &task).expect("insert");
+
+        assert!(touch_last_accessed_at(&conn, &task.id, 1_700_000_300).expect("touch"));
+
+        let fetched = get_by_id(&conn, &task.id).expect("get").expect("found");
+        assert_eq!(fetched.last_accessed_at, 1_700_000_300);
+    }
+
+    #[test]
+    fn test_cleanup_inactive_completed_tasks_returns_csv_paths() {
+        let conn = setup_db();
+        let mut expired = Task::new("old query", "combined");
+        expired.id = "expired".to_string();
+        expired.status = TaskStatus::Completed;
+        expired.created_at = 1_700_000_000;
+        expired.updated_at = 1_700_000_100;
+        expired.last_accessed_at = 1_700_000_100;
+        expired.result = Some(TaskResult {
+            total_papers: 1,
+            filtered_papers: 1,
+            data: serde_json::json!([]),
+            csv_path: Some("output/expired/results.csv".to_string()),
+            query_plan: None,
+        });
+        insert(&conn, &expired).expect("insert expired");
+
+        let mut active = Task::new("active query", "combined");
+        active.id = "active".to_string();
+        active.status = TaskStatus::Completed;
+        active.created_at = 1_700_000_000;
+        active.updated_at = 1_700_000_100;
+        active.last_accessed_at = 1_700_008_000;
+        insert(&conn, &active).expect("insert active");
+
+        let expired_records =
+            cleanup_inactive_before(&conn, 1_700_007_300).expect("cleanup inactive");
+
+        assert_eq!(expired_records.len(), 1);
+        assert_eq!(expired_records[0].task_id, "expired");
+        assert_eq!(
+            expired_records[0].csv_path.as_deref(),
+            Some("output/expired/results.csv")
+        );
+        assert!(get_by_id(&conn, "expired").expect("get expired").is_none());
+        assert!(get_by_id(&conn, "active").expect("get active").is_some());
     }
 }

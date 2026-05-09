@@ -18,6 +18,7 @@ export class SettingsPage {
   constructor() {
     this.providers = [];
     this.adminKey = localStorage.getItem(STORAGE_KEY) || '';
+    this.isAuthenticated = false;
     this.editingName = null;
   }
 
@@ -34,91 +35,98 @@ export class SettingsPage {
       <section class="api-section">
         <div class="container">
           <div class="api-card settings-card">
-            <h1 class="api-title">模型服务商配置</h1>
-            <p class="api-intro">在这里配置 OpenAI 兼容模型服务商。配置会保存到本地 SQLite，保存后立即生效，不需要重启。</p>
-
-            <div class="settings-grid">
-              <div class="api-block">
-                <h2 class="api-heading">管理员访问</h2>
-                <p class="settings-help">
-                  Admin API Key 是后端管理员密钥，用来保护模型服务商配置，避免任何人都能修改你的模型 API Key。
-                  第一次使用请在服务器终端运行：
-                </p>
-                <div class="code-block settings-command"><code>cargo run -- init-admin --name Admin</code></div>
-                <p class="form-hint">
-                  同时确保 <code>config.toml</code> 里 <code>[server].admin_enabled = true</code>，然后把命令输出的 key 粘贴到下面。
-                </p>
-                <label class="form-label" for="admin-key">Admin API Key（X-API-Key）</label>
-                <input id="admin-key" class="form-input" type="password" value="${escapeHtml(this.adminKey)}" placeholder="粘贴 init-admin 输出的管理员 key">
-                <p class="form-hint">只保存在当前浏览器 localStorage，不会提交到代码仓库。</p>
-                <button id="load-providers" class="btn btn-primary">加载当前配置</button>
-                <div class="admin-key-change">
-                  <h3>修改为自定义 Admin API Key</h3>
-                  <p class="form-hint">先粘贴当前 key，再输入两次新 key。成功后浏览器会自动保存新 key，旧 key 立即失效。</p>
-                  <form id="admin-key-form" class="settings-form">
-                    <label class="form-label" for="new-admin-key">新 Admin API Key</label>
-                    <input id="new-admin-key" name="new_admin_key" class="form-input" type="password" autocomplete="new-password" placeholder="至少 8 位，不含空格">
-                    <label class="form-label" for="new-admin-key-confirm">再次输入新 Admin API Key</label>
-                    <input id="new-admin-key-confirm" name="new_admin_key_confirm" class="form-input" type="password" autocomplete="new-password" placeholder="再输入一次以确认">
-                    <button class="btn btn-secondary" type="submit">保存自定义 Key</button>
-                  </form>
-                </div>
-              </div>
-
-              <div class="api-block">
-                <h2 id="provider-form-title" class="api-heading">新增模型服务商</h2>
-                <form id="provider-form" class="settings-form">
-                  <label class="form-label" for="provider-name">名称</label>
-                  <input id="provider-name" name="name" class="form-input" required placeholder="my-provider">
-
-                  <label class="form-label" for="provider-interface">接口类型</label>
-                  <select id="provider-interface" name="interface_type" class="form-input">
-                    <option value="chat_completions">/v1/chat/completions</option>
-                    <option value="responses">/v1/responses</option>
-                  </select>
-
-                  <label class="form-label" for="provider-endpoint">Endpoint</label>
-                  <input id="provider-endpoint" name="endpoint" class="form-input" required placeholder="https://example.com 或 https://example.com/v1/chat/completions">
-                  <p class="form-hint">可以填写 Base URL，系统会按接口类型自动补全 /v1/chat/completions 或 /v1/responses。</p>
-
-                  <label class="form-label" for="provider-model">模型名称</label>
-                  <input id="provider-model" name="model" class="form-input" required placeholder="gpt-4.1-mini">
-
-                  <label class="form-label" for="provider-key">API Key</label>
-                  <input id="provider-key" name="api_key" class="form-input" type="password" placeholder="更新已有服务商时留空 = 保留旧 key">
-
-                  <div class="form-row">
-                    <div class="form-group">
-                      <label class="form-label" for="provider-order">优先级</label>
-                      <input id="provider-order" name="order" class="form-input" type="number" value="100">
-                    </div>
-                    <label class="settings-toggle">
-                      <input id="provider-enabled" name="enabled" type="checkbox" checked>
-                      <span>启用</span>
-                    </label>
-                  </div>
-
-                  <div class="settings-actions">
-                    <button class="btn btn-primary" type="submit">保存服务商</button>
-                    <button class="btn btn-secondary" type="submit" data-test-after-save="true">
-                      <i class="bi bi-wifi"></i> 保存并测试连通性
-                    </button>
-                    <button id="cancel-provider-edit" class="btn btn-outline hidden" type="button">取消编辑</button>
-                  </div>
-                </form>
-              </div>
-            </div>
-
-            <div class="api-block">
-              <h2 class="api-heading">已配置服务商</h2>
-              <div id="settings-message" class="settings-message"></div>
-              <div id="provider-list" class="provider-list">
-                <p class="form-hint">点击“加载当前配置”查看已有服务商；每个服务商卡片右侧都有“测试连通性”按钮。</p>
-              </div>
-            </div>
+            ${this.isAuthenticated ? this.renderSettingsContent() : this.renderAccessGate()}
           </div>
         </div>
       </section>
+    `;
+  }
+
+  renderAccessGate() {
+    return `
+      <h1 class="api-title">设置访问</h1>
+      <form id="settings-access-form" class="settings-form settings-access-form">
+        <label class="form-label" for="admin-key">管理员密码</label>
+        <input id="admin-key" class="form-input" type="password" value="${escapeHtml(this.adminKey)}" autocomplete="current-password" placeholder="输入管理员密码">
+        <div id="settings-message" class="settings-message"></div>
+        <button id="load-providers" class="btn btn-primary" type="submit">进入设置</button>
+      </form>
+    `;
+  }
+
+  renderSettingsContent() {
+    return `
+      <h1 class="api-title">模型服务商配置</h1>
+
+      <div class="settings-grid">
+        <div class="api-block">
+          <h2 class="api-heading">访问凭据</h2>
+          <label class="form-label" for="admin-key">管理员密码</label>
+          <input id="admin-key" class="form-input" type="password" value="${escapeHtml(this.adminKey)}" autocomplete="current-password" placeholder="当前管理员密码">
+          <button id="load-providers" class="btn btn-primary" type="button">刷新配置</button>
+          <div class="admin-key-change">
+            <h3>修改管理员密码</h3>
+            <form id="admin-key-form" class="settings-form">
+              <label class="form-label" for="new-admin-key">新管理员密码</label>
+              <input id="new-admin-key" name="new_admin_key" class="form-input" type="password" autocomplete="new-password" placeholder="至少 6 位，不含空格">
+              <label class="form-label" for="new-admin-key-confirm">再次输入新密码</label>
+              <input id="new-admin-key-confirm" name="new_admin_key_confirm" class="form-input" type="password" autocomplete="new-password" placeholder="再输入一次以确认">
+              <button class="btn btn-secondary" type="submit">保存新密码</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="api-block">
+          <h2 id="provider-form-title" class="api-heading">新增模型服务商</h2>
+          <form id="provider-form" class="settings-form">
+            <label class="form-label" for="provider-name">名称</label>
+            <input id="provider-name" name="name" class="form-input" required placeholder="my-provider">
+
+            <label class="form-label" for="provider-interface">接口类型</label>
+            <select id="provider-interface" name="interface_type" class="form-input">
+              <option value="chat_completions">/v1/chat/completions</option>
+              <option value="responses">/v1/responses</option>
+            </select>
+
+            <label class="form-label" for="provider-endpoint">Endpoint</label>
+            <input id="provider-endpoint" name="endpoint" class="form-input" required placeholder="https://example.com 或 https://example.com/v1/chat/completions">
+            <p class="form-hint">Base URL 会按接口类型自动补全路径。</p>
+
+            <label class="form-label" for="provider-model">模型名称</label>
+            <input id="provider-model" name="model" class="form-input" required placeholder="gpt-4.1-mini">
+
+            <label class="form-label" for="provider-key">API Key</label>
+            <input id="provider-key" name="api_key" class="form-input" type="password" placeholder="更新已有服务商时留空 = 保留旧 key">
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="provider-order">优先级</label>
+                <input id="provider-order" name="order" class="form-input" type="number" value="100">
+              </div>
+              <label class="settings-toggle">
+                <input id="provider-enabled" name="enabled" type="checkbox" checked>
+                <span>启用</span>
+              </label>
+            </div>
+
+            <div class="settings-actions">
+              <button class="btn btn-primary" type="submit">保存服务商</button>
+              <button class="btn btn-secondary" type="submit" data-test-after-save="true">
+                <i class="bi bi-wifi"></i> 保存并测试连通性
+              </button>
+              <button id="cancel-provider-edit" class="btn btn-outline hidden" type="button">取消编辑</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="api-block">
+        <h2 class="api-heading">已配置服务商</h2>
+        <div id="settings-message" class="settings-message"></div>
+        <div id="provider-list" class="provider-list">
+          <p class="form-hint">点击“刷新配置”查看已有服务商。</p>
+        </div>
+      </div>
     `;
   }
 
@@ -132,14 +140,18 @@ export class SettingsPage {
     });
     document.getElementById('admin-key')?.addEventListener('input', (event) => {
       this.adminKey = event.target.value.trim();
-      localStorage.setItem(STORAGE_KEY, this.adminKey);
     });
-    document.getElementById('load-providers')?.addEventListener('click', () => this.loadProviders());
+    document.getElementById('settings-access-form')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      this.loadProviders();
+    });
+    document.getElementById('load-providers')?.addEventListener('click', (event) => {
+      if (event.currentTarget?.form?.id === 'settings-access-form') return;
+      this.loadProviders();
+    });
     document.getElementById('admin-key-form')?.addEventListener('submit', (event) => this.changeAdminKey(event));
     document.getElementById('provider-form')?.addEventListener('submit', (event) => this.saveProvider(event));
     document.getElementById('cancel-provider-edit')?.addEventListener('click', () => this.resetProviderForm());
-
-    if (this.adminKey) this.loadProviders();
   }
 
   async loadProviders() {
@@ -147,12 +159,25 @@ export class SettingsPage {
     this.setMessage('正在加载服务商配置...');
     try {
       const data = await listLlmProviders(this.adminKey);
+      const wasAuthenticated = this.isAuthenticated;
       this.providers = data.providers || [];
+      this.isAuthenticated = true;
+      localStorage.setItem(STORAGE_KEY, this.adminKey);
+      if (!wasAuthenticated) {
+        this.refreshPage();
+      }
       this.renderProviderList();
       this.setMessage(`已加载 ${this.providers.length} 个服务商。`);
     } catch (error) {
       this.setMessage(error.message, true);
     }
+  }
+
+  refreshPage() {
+    const app = document.getElementById('app');
+    if (!app) return;
+    app.innerHTML = this.render();
+    this.mount();
   }
 
   async changeAdminKey(event) {
@@ -163,8 +188,8 @@ export class SettingsPage {
     const newKey = String(formData.get('new_admin_key') || '').trim();
     const confirmKey = String(formData.get('new_admin_key_confirm') || '').trim();
 
-    if (newKey.length < 8) {
-      this.setMessage('新 Admin API Key 至少需要 8 位。', true);
+    if (newKey.length < 6) {
+      this.setMessage('新管理员密码至少需要 6 位。', true);
       return;
     }
     if (/\s/.test(newKey)) {
@@ -186,7 +211,7 @@ export class SettingsPage {
       const adminKeyInput = document.getElementById('admin-key');
       if (adminKeyInput) adminKeyInput.value = newKey;
       event.target.reset();
-      this.setMessage('Admin API Key 已更新，旧 key 已失效。');
+      this.setMessage('管理员密码已更新，旧密码已失效。');
     } catch (error) {
       this.setMessage(error.message, true);
     }
@@ -328,7 +353,7 @@ export class SettingsPage {
 
   requireKey() {
     if (this.adminKey) return true;
-    this.setMessage('请先粘贴 Admin API Key。可通过 cargo run -- init-admin --name Admin 生成。', true);
+    this.setMessage('请先输入管理员密码。', true);
     return false;
   }
 

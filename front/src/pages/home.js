@@ -278,7 +278,7 @@ export class HomePage {
             
             <div class="results-warning">
               <i class="bi bi-info-circle"></i>
-              <span>搜索结果将在 10 分钟后自动清理，请及时下载所需数据</span>
+              <span>搜索结果保存在云端；连续 2 小时未访问后会自动清理</span>
             </div>
 
             <div id="query-plan-panel" class="query-plan-panel hidden"></div>

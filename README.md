@@ -77,11 +77,13 @@ LLMs are optional, but recommended for Chinese search and semantic filtering.
 admin_enabled = true
 ```
 
-2. Create the first admin key:
+2. Create the first admin password:
 
 ```bash
-cargo run -- init-admin --name Admin
+cargo run -- init-admin --name Admin --key 123456
 ```
+
+On a fresh deployment, the server will also create the first admin password automatically when it starts. Set `SCHOLARLENS_ADMIN_PASSWORD` to use your own value; otherwise the initial password is `123456`.
 
 3. Start the server and open:
 
