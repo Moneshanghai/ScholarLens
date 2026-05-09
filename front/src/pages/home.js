@@ -35,33 +35,31 @@ export class HomePage {
       <!-- Header with History Toggle -->
       <header class="header">
         <div class="container header-container">
-          <button id="history-toggle" class="btn-history" aria-label="查询历史">
-            <i class="bi bi-clock-history"></i>
-            <span>历史记录</span>
-          </button>
           <a href="/" class="header-logo">ScholarLens</a>
-          <a href="/docs" class="header-link"><i class="bi bi-file-earmark-text"></i> API 文档</a>
-          <a href="/settings" class="header-link"><i class="bi bi-gear"></i> 模型配置</a>
+          <nav class="header-nav">
+            <button id="history-toggle" class="btn-history" aria-label="查询历史">
+              <i class="bi bi-clock-history"></i>
+              <span>历史记录</span>
+            </button>
+            <a href="/docs" class="header-link"><i class="bi bi-file-earmark-text"></i> <span>API 文档</span></a>
+            <a href="/settings" class="header-link"><i class="bi bi-gear"></i> <span>模型配置</span></a>
+            <a href="/logout" data-logout class="header-link header-link-logout" title="登出"><i class="bi bi-box-arrow-right"></i> <span>登出</span></a>
+          </nav>
         </div>
       </header>
 
       <!-- Hero Section -->
       <section class="hero">
-        <div class="hero-decoration">
-          <div class="hero-circle hero-circle-1"></div>
-          <div class="hero-circle hero-circle-2"></div>
-          <div class="hero-square"></div>
-        </div>
         <div class="container">
-          <div class="hero-title-row">
-            <i class="bi bi-journal-richtext"></i>
-            <h1 class="hero-title">ScholarLens</h1>
+          <div class="hero-icon"><i class="bi bi-journal-richtext"></i></div>
+          <div class="hero-meta">
+            <h1 class="hero-title">学术文献智能搜索</h1>
+            <p class="hero-subtitle">多源聚合 · 智能筛选 · 一站式学术检索体验</p>
           </div>
-          <p class="hero-subtitle">学术文献智能搜索与筛选平台</p>
           <div class="hero-badges">
-            <span class="badge badge-primary">AI 检索</span>
-            <span class="badge badge-info">多源聚合</span>
-            <span class="badge badge-success">文献筛选</span>
+            <span class="badge badge-primary"><i class="bi bi-stars"></i> AI 检索</span>
+            <span class="badge badge-info"><i class="bi bi-diagram-3"></i> 多源聚合</span>
+            <span class="badge badge-success"><i class="bi bi-funnel"></i> 文献筛选</span>
           </div>
         </div>
       </section>

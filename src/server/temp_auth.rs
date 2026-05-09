@@ -175,101 +175,228 @@ const LOGIN_PAGE: &str = r#"<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ScholarLens 临时登录</title>
+  <title>ScholarLens · 登录</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <style>
     :root {
       color-scheme: light;
-      --ink: #14213d;
-      --muted: #5f6f89;
-      --line: #d9e2ec;
-      --card: rgba(255, 255, 255, 0.92);
-      --accent: #0f766e;
-      --accent-2: #f59e0b;
-      --bg: #eef7f4;
+      --primary: #4361ee;
+      --primary-hover: #3a56d4;
+      --primary-dark: #3a0ca3;
+      --gradient-brand: linear-gradient(135deg, #4361ee 0%, #3a0ca3 100%);
+      --gradient-brand-hover: linear-gradient(135deg, #3a56d4 0%, #2f088b 100%);
+      --bg: #f4f6fb;
+      --surface: #ffffff;
+      --border: #e4e7ee;
+      --border-strong: #cbd5e1;
+      --text: #1f2937;
+      --text-strong: #0f172a;
+      --text-muted: #64748b;
+      --text-soft: #94a3b8;
+      --danger: #ef4444;
+      --danger-soft: #fef2f2;
+      --shadow-brand: 0 6px 16px rgba(67, 97, 238, 0.22);
+      --shadow-card: 0 12px 32px rgba(15, 23, 42, 0.10);
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB",
+        "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
     }
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
-      min-height: 100vh;
       margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: var(--font-family);
+      font-size: 0.9375rem;
+      line-height: 1.6;
+      background:
+        radial-gradient(circle at 12% 14%, rgba(67, 97, 238, 0.18), transparent 38%),
+        radial-gradient(circle at 88% 18%, rgba(58, 12, 163, 0.20), transparent 40%),
+        radial-gradient(circle at 78% 92%, rgba(3, 169, 244, 0.14), transparent 42%),
+        var(--bg);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+    .login-shell {
       display: grid;
       place-items: center;
-      padding: 24px;
-      color: var(--ink);
-      font-family: "LXGW WenKai", "Noto Serif SC", Georgia, serif;
-      background:
-        radial-gradient(circle at 16% 18%, rgba(15, 118, 110, 0.24), transparent 28%),
-        radial-gradient(circle at 82% 12%, rgba(245, 158, 11, 0.24), transparent 24%),
-        linear-gradient(135deg, #f8fbf6 0%, var(--bg) 55%, #f7efe0 100%);
+      padding: 32px 20px;
     }
-    .card {
-      width: min(100%, 420px);
+    .login-card {
+      width: min(100%, 440px);
       padding: 36px;
-      border: 1px solid var(--line);
-      border-radius: 28px;
-      background: var(--card);
-      box-shadow: 0 30px 90px rgba(20, 33, 61, 0.16);
-      backdrop-filter: blur(14px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow-card);
     }
-    .eyebrow {
-      margin: 0 0 12px;
-      color: var(--accent);
-      font: 700 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-      letter-spacing: 0.16em;
-      text-transform: uppercase;
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+    .brand-mark {
+      display: inline-grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      color: #ffffff;
+      background: var(--gradient-brand);
+      border-radius: 12px;
+      box-shadow: var(--shadow-brand);
+      font-size: 1.25rem;
+    }
+    .brand-meta { display: flex; flex-direction: column; gap: 2px; }
+    .brand-name {
+      color: var(--text-strong);
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .brand-tag {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      font-weight: 500;
     }
     h1 {
-      margin: 0 0 10px;
-      font-size: clamp(30px, 7vw, 48px);
-      line-height: 1;
-      letter-spacing: -0.05em;
-    }
-    p { margin: 0 0 26px; color: var(--muted); line-height: 1.7; }
-    label {
-      display: block;
-      margin-bottom: 10px;
+      margin: 0 0 8px;
+      color: var(--text-strong);
+      font-size: 1.5rem;
       font-weight: 700;
+      letter-spacing: -0.02em;
     }
-    input {
+    .subtitle {
+      margin: 0 0 24px;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
+    .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--text-strong);
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .input-wrap { position: relative; }
+    .input-wrap > i {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-soft);
+      pointer-events: none;
+      font-size: 1rem;
+    }
+    input[type="password"] {
       width: 100%;
-      height: 52px;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 0 16px;
-      color: var(--ink);
-      font: 700 22px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-      letter-spacing: 0.18em;
+      min-height: 44px;
+      padding: 9px 12px 9px 38px;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      font-family: var(--font-family);
+      font-size: 0.95rem;
+      letter-spacing: 0.08em;
       outline: none;
-      background: #fff;
+      transition: border-color 180ms ease, box-shadow 180ms ease;
     }
-    input:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.14);
+    input[type="password"]::placeholder {
+      color: var(--text-soft);
+      letter-spacing: normal;
+    }
+    input[type="password"]:hover { border-color: #94a3b8; }
+    input[type="password"]:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.16);
     }
     button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
       width: 100%;
-      height: 52px;
-      margin-top: 18px;
-      border: 0;
-      border-radius: 16px;
-      color: white;
+      min-height: 44px;
+      margin-top: 8px;
+      padding: 10px 16px;
+      color: #ffffff;
+      background: var(--gradient-brand);
+      border: 1px solid transparent;
+      border-radius: 8px;
       cursor: pointer;
-      font: 800 16px/1 ui-sans-serif, system-ui, sans-serif;
-      background: linear-gradient(135deg, var(--accent), #115e59);
-      box-shadow: 0 14px 28px rgba(15, 118, 110, 0.24);
+      font-family: var(--font-family);
+      font-size: 0.95rem;
+      font-weight: 600;
+      box-shadow: var(--shadow-brand);
+      transition: background 180ms ease, box-shadow 180ms ease, transform 120ms ease;
+    }
+    button:hover {
+      background: var(--gradient-brand-hover);
+      box-shadow: 0 8px 20px rgba(67, 97, 238, 0.32);
+    }
+    button:active { transform: translateY(1px); }
+    .meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 18px;
+      padding: 10px 12px;
+      color: #0369a1;
+      background: rgba(3, 169, 244, 0.08);
+      border: 1px solid rgba(3, 169, 244, 0.2);
+      border-radius: 8px;
+      font-size: 0.825rem;
+    }
+    .meta i { color: #03a9f4; font-size: 1rem; flex-shrink: 0; }
+    .footer-line {
+      padding: 18px 20px;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      text-align: center;
+    }
+    @media (max-width: 480px) {
+      .login-card { padding: 28px 22px; }
+      h1 { font-size: 1.35rem; }
     }
   </style>
 </head>
 <body>
-  <main class="card">
-    <p class="eyebrow">Temporary Gate</p>
-    <h1>ScholarLens</h1>
-    <p>当前站点已临时开启访问密码，登录后可继续使用搜索、历史记录和设置页面。</p>
-    <form method="post" action="/login">
-      <label for="password">访问密码</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
-      <button type="submit">进入 ScholarLens</button>
-    </form>
+  <div></div>
+  <main class="login-shell">
+    <section class="login-card">
+      <div class="brand">
+        <span class="brand-mark"><i class="bi bi-journal-richtext"></i></span>
+        <span class="brand-meta">
+          <span class="brand-name">ScholarLens</span>
+          <span class="brand-tag">学术文献智能搜索平台</span>
+        </span>
+      </div>
+      <h1>欢迎回来</h1>
+      <p class="subtitle">站点已启用临时访问保护，请输入访问密码继续使用搜索、历史记录与模型配置。</p>
+      <form method="post" action="/login" autocomplete="on">
+        <div class="field">
+          <label for="password">访问密码</label>
+          <div class="input-wrap">
+            <i class="bi bi-shield-lock"></i>
+            <input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入访问密码" autofocus required>
+          </div>
+        </div>
+        <button type="submit"><i class="bi bi-box-arrow-in-right"></i> 进入 ScholarLens</button>
+      </form>
+      <div class="meta">
+        <i class="bi bi-info-circle"></i>
+        <span>会话将在 12 小时后自动失效，期间无需重新登录。</span>
+      </div>
+    </section>
   </main>
+  <div class="footer-line">ScholarLens · 学术文献智能搜索平台</div>
 </body>
 </html>"#;
 
@@ -278,44 +405,101 @@ const LOGIN_FAILED_PAGE: &str = r#"<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>密码错误</title>
+  <title>密码错误 · ScholarLens</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <style>
+    :root {
+      color-scheme: light;
+      --primary: #4361ee;
+      --primary-dark: #3a0ca3;
+      --gradient-brand: linear-gradient(135deg, #4361ee 0%, #3a0ca3 100%);
+      --gradient-brand-hover: linear-gradient(135deg, #3a56d4 0%, #2f088b 100%);
+      --bg: #f4f6fb;
+      --surface: #ffffff;
+      --border: #e4e7ee;
+      --text-strong: #0f172a;
+      --text-muted: #64748b;
+      --danger: #ef4444;
+      --danger-soft: rgba(239, 68, 68, 0.12);
+      --shadow-brand: 0 6px 16px rgba(67, 97, 238, 0.22);
+      --shadow-card: 0 12px 32px rgba(15, 23, 42, 0.10);
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB",
+        "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    }
+    * { box-sizing: border-box; }
     body {
       min-height: 100vh;
       margin: 0;
       display: grid;
       place-items: center;
       padding: 24px;
-      color: #14213d;
-      font-family: "LXGW WenKai", "Noto Serif SC", Georgia, serif;
-      background: linear-gradient(135deg, #fff7ed, #eef7f4);
+      color: var(--text-strong);
+      font-family: var(--font-family);
+      background:
+        radial-gradient(circle at 14% 18%, rgba(239, 68, 68, 0.14), transparent 38%),
+        radial-gradient(circle at 86% 12%, rgba(67, 97, 238, 0.16), transparent 42%),
+        var(--bg);
     }
     .card {
       width: min(100%, 420px);
-      padding: 34px;
-      border-radius: 26px;
-      background: white;
-      box-shadow: 0 24px 70px rgba(20, 33, 61, 0.14);
+      padding: 32px 30px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow-card);
+      text-align: center;
     }
-    h1 { margin: 0 0 10px; font-size: 34px; }
-    p { color: #5f6f89; line-height: 1.7; }
+    .icon {
+      display: inline-grid;
+      place-items: center;
+      width: 56px;
+      height: 56px;
+      margin-bottom: 16px;
+      color: var(--danger);
+      background: var(--danger-soft);
+      border-radius: 50%;
+      font-size: 1.6rem;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.3rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    p {
+      margin: 0 0 22px;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
     a {
       display: inline-flex;
-      margin-top: 16px;
-      padding: 14px 18px;
-      border-radius: 14px;
-      color: white;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 18px;
+      color: #ffffff;
       text-decoration: none;
-      font-weight: 800;
-      background: #0f766e;
+      background: var(--gradient-brand);
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      box-shadow: var(--shadow-brand);
+      transition: background 180ms ease, box-shadow 180ms ease, transform 120ms ease;
     }
+    a:hover {
+      background: var(--gradient-brand-hover);
+      box-shadow: 0 8px 20px rgba(67, 97, 238, 0.32);
+    }
+    a:active { transform: translateY(1px); }
   </style>
 </head>
 <body>
   <main class="card">
+    <div class="icon"><i class="bi bi-exclamation-triangle"></i></div>
     <h1>密码错误</h1>
-    <p>请输入正确的临时访问密码后再继续使用 ScholarLens。</p>
-    <a href="/login">重新登录</a>
+    <p>访问密码不正确，请重新输入临时访问密码以继续使用 ScholarLens。</p>
+    <a href="/login"><i class="bi bi-arrow-left"></i> 重新登录</a>
   </main>
 </body>
 </html>"#;

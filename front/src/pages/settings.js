@@ -27,16 +27,21 @@ export class SettingsPage {
       <header class="header">
         <div class="container header-container">
           <a href="/" class="header-logo">ScholarLens</a>
-          <a href="/docs" class="header-link"><i class="bi bi-file-earmark-text"></i> API 文档</a>
-          <span class="header-link header-link-active"><i class="bi bi-gear"></i> 模型配置</span>
+          <nav class="header-nav">
+            <button id="history-toggle" class="btn-history" aria-label="查询历史">
+              <i class="bi bi-clock-history"></i>
+              <span>历史记录</span>
+            </button>
+            <a href="/docs" class="header-link"><i class="bi bi-file-earmark-text"></i> <span>API 文档</span></a>
+            <span class="header-link header-link-active"><i class="bi bi-gear"></i> <span>模型配置</span></span>
+            <a href="/logout" data-logout class="header-link header-link-logout" title="登出"><i class="bi bi-box-arrow-right"></i> <span>登出</span></a>
+          </nav>
         </div>
       </header>
 
-      <section class="api-section">
+      <section class="settings-section">
         <div class="container">
-          <div class="api-card settings-card">
-            ${this.isAuthenticated ? this.renderSettingsContent() : this.renderAccessGate()}
-          </div>
+          ${this.isAuthenticated ? this.renderSettingsContent() : this.renderAccessGate()}
         </div>
       </section>
     `;
@@ -44,87 +49,183 @@ export class SettingsPage {
 
   renderAccessGate() {
     return `
-      <h1 class="api-title">设置访问</h1>
-      <form id="settings-access-form" class="settings-form settings-access-form">
-        <label class="form-label" for="admin-key">管理员密码</label>
-        <input id="admin-key" class="form-input" type="password" value="${escapeHtml(this.adminKey)}" autocomplete="current-password" placeholder="输入管理员密码">
-        <div id="settings-message" class="settings-message"></div>
-        <button id="load-providers" class="btn btn-primary" type="submit">进入设置</button>
-      </form>
+      <div class="settings-gate-card">
+        <div class="settings-gate-icon"><i class="bi bi-shield-lock"></i></div>
+        <h1 class="settings-gate-title">设置访问</h1>
+        <p class="settings-gate-subtitle">请输入管理员密码以管理模型服务商与系统配置</p>
+        <form id="settings-access-form" class="settings-form settings-access-form">
+          <div class="form-group">
+            <label class="form-label" for="admin-key">管理员密码</label>
+            <input id="admin-key" class="form-input" type="password" value="${escapeHtml(this.adminKey)}" autocomplete="current-password" placeholder="输入管理员密码" autofocus>
+          </div>
+          <div id="settings-message" class="settings-message"></div>
+          <button id="load-providers" class="btn btn-primary" type="submit">
+            <i class="bi bi-box-arrow-in-right"></i>
+            <span>进入设置</span>
+          </button>
+        </form>
+      </div>
     `;
   }
 
   renderSettingsContent() {
+    const editing = Boolean(this.editingName);
     return `
-      <h1 class="api-title">模型服务商配置</h1>
+      <div class="settings-page-header">
+        <div class="settings-page-icon"><i class="bi bi-gear-fill"></i></div>
+        <div class="settings-page-meta">
+          <h1 class="settings-page-title">模型服务商配置</h1>
+          <p class="settings-page-subtitle">管理 OpenAI 兼容服务商，调整管理员密码及连通性测试</p>
+        </div>
+      </div>
 
-      <div class="settings-grid">
-        <div class="api-block">
-          <h2 class="api-heading">访问凭据</h2>
-          <label class="form-label" for="admin-key">管理员密码</label>
-          <input id="admin-key" class="form-input" type="password" value="${escapeHtml(this.adminKey)}" autocomplete="current-password" placeholder="当前管理员密码">
-          <button id="load-providers" class="btn btn-primary" type="button">刷新配置</button>
-          <div class="admin-key-change">
-            <h3>修改管理员密码</h3>
-            <form id="admin-key-form" class="settings-form">
-              <label class="form-label" for="new-admin-key">新管理员密码</label>
-              <input id="new-admin-key" name="new_admin_key" class="form-input" type="password" autocomplete="new-password" placeholder="至少 6 位，不含空格">
-              <label class="form-label" for="new-admin-key-confirm">再次输入新密码</label>
-              <input id="new-admin-key-confirm" name="new_admin_key_confirm" class="form-input" type="password" autocomplete="new-password" placeholder="再输入一次以确认">
-              <button class="btn btn-secondary" type="submit">保存新密码</button>
-            </form>
+      <div id="settings-message" class="settings-message"></div>
+
+      <div class="settings-grid settings-grid-top">
+        <div class="settings-card">
+          <div class="settings-card-header">
+            <span class="settings-card-icon"><i class="bi bi-key"></i></span>
+            <div class="settings-card-meta">
+              <h2 class="settings-card-title">访问凭据</h2>
+              <p class="settings-card-subtitle">用于调用管理员接口</p>
+            </div>
+          </div>
+          <div class="settings-card-body">
+            <div class="form-group">
+              <label class="form-label" for="admin-key">管理员密码</label>
+              <input id="admin-key" class="form-input" type="password" value="${escapeHtml(this.adminKey)}" autocomplete="current-password" placeholder="当前管理员密码">
+              <p class="form-hint">输入后点击下方"刷新配置"重新加载</p>
+            </div>
+            <div class="settings-actions">
+              <button id="load-providers" class="btn btn-primary" type="button">
+                <i class="bi bi-arrow-clockwise"></i>
+                <span>刷新配置</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        <div class="api-block">
-          <h2 id="provider-form-title" class="api-heading">新增模型服务商</h2>
+        <div class="settings-card">
+          <div class="settings-card-header">
+            <span class="settings-card-icon"><i class="bi bi-cpu"></i></span>
+            <div class="settings-card-meta">
+              <h2 class="settings-card-title">
+                已配置服务商
+                <span class="settings-count-badge" id="provider-count">${this.providers.length}</span>
+              </h2>
+              <p class="settings-card-subtitle">按优先级从低到高调用</p>
+            </div>
+          </div>
+          <div class="settings-card-body">
+            <div id="provider-list" class="provider-list">
+              ${this.providers.length === 0 ? '<div class="empty-state"><i class="bi bi-inboxes"></i><p>暂无服务商</p><small>使用下方表单添加</small></div>' : ''}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <span class="settings-card-icon"><i class="bi bi-${editing ? 'pencil-square' : 'plus-circle'}"></i></span>
+          <div class="settings-card-meta">
+            <h2 id="provider-form-title" class="settings-card-title">${editing ? `编辑服务商：${escapeHtml(this.editingName)}` : '新增模型服务商'}</h2>
+            <p class="settings-card-subtitle">支持 OpenAI 兼容的 chat_completions 与 responses 接口</p>
+          </div>
+        </div>
+        <div class="settings-card-body">
           <form id="provider-form" class="settings-form">
-            <label class="form-label" for="provider-name">名称</label>
-            <input id="provider-name" name="name" class="form-input" required placeholder="my-provider">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="provider-name">名称 <span class="required">*</span></label>
+                <input id="provider-name" name="name" class="form-input" required placeholder="my-provider">
+                <p class="form-hint">建议使用小写英文与连字符</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="provider-interface">接口类型</label>
+                <select id="provider-interface" name="interface_type" class="form-input">
+                  <option value="chat_completions">/v1/chat/completions</option>
+                  <option value="responses">/v1/responses</option>
+                </select>
+              </div>
+            </div>
 
-            <label class="form-label" for="provider-interface">接口类型</label>
-            <select id="provider-interface" name="interface_type" class="form-input">
-              <option value="chat_completions">/v1/chat/completions</option>
-              <option value="responses">/v1/responses</option>
-            </select>
+            <div class="form-group">
+              <label class="form-label" for="provider-endpoint">Endpoint <span class="required">*</span></label>
+              <input id="provider-endpoint" name="endpoint" class="form-input" required placeholder="https://example.com 或 https://example.com/v1/chat/completions">
+              <p class="form-hint">Base URL 会按接口类型自动补全路径</p>
+            </div>
 
-            <label class="form-label" for="provider-endpoint">Endpoint</label>
-            <input id="provider-endpoint" name="endpoint" class="form-input" required placeholder="https://example.com 或 https://example.com/v1/chat/completions">
-            <p class="form-hint">Base URL 会按接口类型自动补全路径。</p>
-
-            <label class="form-label" for="provider-model">模型名称</label>
-            <input id="provider-model" name="model" class="form-input" required placeholder="gpt-4.1-mini">
-
-            <label class="form-label" for="provider-key">API Key</label>
-            <input id="provider-key" name="api_key" class="form-input" type="password" placeholder="更新已有服务商时留空 = 保留旧 key">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="provider-model">模型名称 <span class="required">*</span></label>
+                <input id="provider-model" name="model" class="form-input" required placeholder="gpt-4.1-mini">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="provider-key">API Key</label>
+                <input id="provider-key" name="api_key" class="form-input" type="password" placeholder="编辑时留空 = 保留旧 key">
+              </div>
+            </div>
 
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label" for="provider-order">优先级</label>
                 <input id="provider-order" name="order" class="form-input" type="number" value="100">
+                <p class="form-hint">数值越小优先级越高</p>
               </div>
-              <label class="settings-toggle">
-                <input id="provider-enabled" name="enabled" type="checkbox" checked>
-                <span>启用</span>
-              </label>
+              <div class="form-group">
+                <label class="form-label">状态</label>
+                <label class="settings-toggle">
+                  <input id="provider-enabled" name="enabled" type="checkbox" checked>
+                  <span>启用此服务商</span>
+                </label>
+              </div>
             </div>
 
             <div class="settings-actions">
-              <button class="btn btn-primary" type="submit">保存服务商</button>
-              <button class="btn btn-secondary" type="submit" data-test-after-save="true">
-                <i class="bi bi-wifi"></i> 保存并测试连通性
+              <button class="btn btn-primary" type="submit">
+                <i class="bi bi-check2"></i>
+                <span>保存服务商</span>
               </button>
-              <button id="cancel-provider-edit" class="btn btn-outline hidden" type="button">取消编辑</button>
+              <button class="btn btn-secondary" type="submit" data-test-after-save="true">
+                <i class="bi bi-wifi"></i>
+                <span>保存并测试连通性</span>
+              </button>
+              <button id="cancel-provider-edit" class="btn btn-outline ${editing ? '' : 'hidden'}" type="button">
+                <i class="bi bi-x-lg"></i>
+                <span>取消编辑</span>
+              </button>
             </div>
           </form>
         </div>
       </div>
 
-      <div class="api-block">
-        <h2 class="api-heading">已配置服务商</h2>
-        <div id="settings-message" class="settings-message"></div>
-        <div id="provider-list" class="provider-list">
-          <p class="form-hint">点击“刷新配置”查看已有服务商。</p>
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <span class="settings-card-icon settings-card-icon-warn"><i class="bi bi-shield-lock"></i></span>
+          <div class="settings-card-meta">
+            <h2 class="settings-card-title">安全 · 修改管理员密码</h2>
+            <p class="settings-card-subtitle">保存后旧密码立即失效，请妥善保管新密码</p>
+          </div>
+        </div>
+        <div class="settings-card-body">
+          <form id="admin-key-form" class="settings-form">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="new-admin-key">新管理员密码</label>
+                <input id="new-admin-key" name="new_admin_key" class="form-input" type="password" autocomplete="new-password" placeholder="至少 6 位，不含空格">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="new-admin-key-confirm">再次输入新密码</label>
+                <input id="new-admin-key-confirm" name="new_admin_key_confirm" class="form-input" type="password" autocomplete="new-password" placeholder="再输入一次以确认">
+              </div>
+            </div>
+            <div class="settings-actions">
+              <button class="btn btn-secondary" type="submit">
+                <i class="bi bi-shield-check"></i>
+                <span>保存新密码</span>
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     `;
@@ -133,6 +234,7 @@ export class SettingsPage {
   mount() {
     window.toggleSidebar?.(false);
     document.querySelectorAll('a[href^="/"]').forEach((link) => {
+      if (link.dataset.logout !== undefined) return;
       link.addEventListener('click', (event) => {
         event.preventDefault();
         router.navigate(link.getAttribute('href'));
@@ -253,28 +355,63 @@ export class SettingsPage {
   renderProviderList() {
     const container = document.getElementById('provider-list');
     if (!container) return;
+
+    const countEl = document.getElementById('provider-count');
+    if (countEl) countEl.textContent = String(this.providers.length);
+
     if (this.providers.length === 0) {
-      container.innerHTML = '<p class="form-hint">还没有配置服务商。</p>';
+      container.innerHTML = `
+        <div class="empty-state">
+          <i class="bi bi-inboxes"></i>
+          <p>暂无服务商</p>
+          <small>使用下方表单添加</small>
+        </div>
+      `;
       return;
     }
 
-    container.innerHTML = this.providers.map((provider, index) => `
-      <article class="provider-card">
-        <div>
-          <h3>${escapeHtml(provider.name)}</h3>
-          <p>${escapeHtml(provider.model)} · ${escapeHtml(provider.interface_type)} · 优先级 ${provider.order}</p>
-          <code>${escapeHtml(provider.endpoint)}</code>
-          <p class="form-hint">${provider.enabled ? '已启用' : '已禁用'} · API key ${provider.api_key_set ? '已设置' : '缺失'}</p>
-        </div>
-        <div class="provider-actions">
-          <button class="btn btn-secondary" type="button" data-action="edit" data-index="${index}">编辑</button>
-          <button class="btn btn-secondary" type="button" data-action="test" data-index="${index}">
-            <i class="bi bi-wifi"></i> 测试连通性
-          </button>
-          <button class="btn btn-danger" type="button" data-action="delete" data-index="${index}">删除</button>
-        </div>
-      </article>
-    `).join('');
+    const sorted = [...this.providers].sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    container.innerHTML = sorted.map((provider) => {
+      const idx = this.providers.indexOf(provider);
+      const enabled = provider.enabled;
+      const hasKey = provider.api_key_set;
+      return `
+        <article class="provider-card${enabled ? '' : ' provider-card-disabled'}">
+          <div class="provider-card-main">
+            <div class="provider-card-head">
+              <h3 class="provider-name">${escapeHtml(provider.name)}</h3>
+              <span class="provider-badge ${enabled ? 'provider-badge-on' : 'provider-badge-off'}">
+                <i class="bi bi-${enabled ? 'check-circle-fill' : 'pause-circle'}"></i>
+                ${enabled ? '已启用' : '已禁用'}
+              </span>
+              <span class="provider-badge provider-badge-priority" title="优先级">
+                <i class="bi bi-sort-numeric-down"></i> ${provider.order}
+              </span>
+            </div>
+            <div class="provider-meta-row">
+              <span class="provider-meta-item"><i class="bi bi-cpu"></i> ${escapeHtml(provider.model)}</span>
+              <span class="provider-meta-item"><i class="bi bi-diagram-3"></i> ${escapeHtml(provider.interface_type)}</span>
+              <span class="provider-meta-item ${hasKey ? '' : 'provider-meta-warn'}">
+                <i class="bi bi-key${hasKey ? '-fill' : ''}"></i> API Key ${hasKey ? '已设置' : '缺失'}
+              </span>
+            </div>
+            <code class="provider-endpoint" title="${escapeHtml(provider.endpoint)}">${escapeHtml(provider.endpoint)}</code>
+          </div>
+          <div class="provider-actions">
+            <button class="btn btn-secondary btn-small" type="button" data-action="edit" data-index="${idx}">
+              <i class="bi bi-pencil"></i> 编辑
+            </button>
+            <button class="btn btn-secondary btn-small" type="button" data-action="test" data-index="${idx}">
+              <i class="bi bi-wifi"></i> 测试
+            </button>
+            <button class="btn btn-danger btn-small" type="button" data-action="delete" data-index="${idx}">
+              <i class="bi bi-trash3"></i> 删除
+            </button>
+          </div>
+        </article>
+      `;
+    }).join('');
 
     container.querySelectorAll('button[data-action]').forEach((button) => {
       button.addEventListener('click', () => this.handleProviderAction(button.dataset.action, Number(button.dataset.index)));

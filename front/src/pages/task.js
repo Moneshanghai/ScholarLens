@@ -31,12 +31,16 @@ export class TaskPage {
       <!-- Header -->
       <header class="header">
         <div class="container header-container">
-          <button id="history-toggle" class="btn-history" aria-label="查询历史">
-            <i class="bi bi-clock-history"></i>
-            <span>历史记录</span>
-          </button>
           <a href="/" class="header-logo">ScholarLens</a>
-          <a href="/docs" class="header-link"><i class="bi bi-file-earmark-text"></i> API 文档</a>
+          <nav class="header-nav">
+            <button id="history-toggle" class="btn-history" aria-label="查询历史">
+              <i class="bi bi-clock-history"></i>
+              <span>历史记录</span>
+            </button>
+            <a href="/docs" class="header-link"><i class="bi bi-file-earmark-text"></i> <span>API 文档</span></a>
+            <a href="/settings" class="header-link"><i class="bi bi-gear"></i> <span>模型配置</span></a>
+            <a href="/logout" data-logout class="header-link header-link-logout" title="登出"><i class="bi bi-box-arrow-right"></i> <span>登出</span></a>
+          </nav>
         </div>
       </header>
 
@@ -144,6 +148,7 @@ export class TaskPage {
 
     // Handle internal links
     document.querySelectorAll('a[href^="/"]').forEach(link => {
+      if (link.dataset.logout !== undefined) return;
       link.addEventListener('click', (e) => {
         e.preventDefault();
         if (this.pollInterval) clearInterval(this.pollInterval);
