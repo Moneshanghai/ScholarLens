@@ -5,8 +5,8 @@
 //! - SQLite persistence with task recovery
 //! - Clean separation of concerns
 //!
-//! Note: Authentication and rate limiting are delegated to
-//! external services like Cloudflare WAF.
+//! Note: rate limiting is delegated to external services like Cloudflare WAF.
+//! A temporary site-wide login gate is currently enabled in `temp_auth`.
 
 pub mod admin;
 pub mod config;
@@ -17,4 +17,5 @@ pub mod recovery;
 pub mod responses;
 pub mod routes;
 pub mod state;
-pub mod task; // Auth logic
+pub mod task;
+pub mod temp_auth;

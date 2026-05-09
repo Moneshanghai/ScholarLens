@@ -1,16 +1,17 @@
 //! Router configuration with middleware.
 //!
-//! Assembles all routes. Authentication and rate limiting
-//! are handled by external services (e.g., Cloudflare WAF).
+//! Assembles all routes. Rate limiting is handled by external services
+//! (e.g., Cloudflare WAF); a temporary login gate is applied here.
 
-use super::admin;
 use super::handlers::{
     health_handler, pipeline_handler, sources_handler, task_bibtex_handler, task_download_handler,
     task_list_handler, task_status_handler,
 };
 use super::responses::ApiErrorResponse;
 use super::state::AppState;
+use super::{admin, temp_auth};
 use axum::{
+    middleware,
     routing::{any, delete, get, patch, post},
     Router,
 };
@@ -82,9 +83,21 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
         ))
         .with_state(state.clone());
 
-    // Build API router - no auth, no rate limiting (handled by Cloudflare)
-    let mut api_router: Router = Router::new()
+    // Public routes for health checks and the temporary login gate.
+    let public_router: Router = Router::new()
+        .route(
+            "/login",
+            get(temp_auth::login_page).post(temp_auth::login_handler),
+        )
+        .route(
+            "/logout",
+            get(temp_auth::logout_handler).post(temp_auth::logout_handler),
+        )
         .route("/health", get(health_handler))
+        .with_state(state.clone());
+
+    // Build protected API router - temporary login is applied below.
+    let mut api_router: Router = Router::new()
         .route("/sources", get(sources_handler))
         .route("/tasks", get(task_list_handler).post(pipeline_handler))
         .route("/tasks/{id}", get(task_status_handler))
@@ -103,8 +116,8 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
             .route("/api/v1/admin/{*path}", any(admin_disabled_handler));
     }
 
-    // If static_dir is provided, serve static files as fallback (SPA mode)
-    if let Some(dir) = static_dir {
+    // If static_dir is provided, serve static files as fallback (SPA mode).
+    let api_router = if let Some(dir) = static_dir {
         let index_path = format!("{}/index.html", dir);
         info!(static_dir = %dir, index = %index_path, "Enabled static file fallback service");
         let serve_dir = ServeDir::new(&dir).fallback(ServeFile::new(&index_path));
@@ -112,7 +125,10 @@ pub fn create_router(state: AppState, static_dir: Option<String>) -> Router {
         api_router.fallback_service(serve_dir)
     } else {
         api_router
-    }
+    };
+
+    let protected_router = api_router.layer(middleware::from_fn(temp_auth::require_temp_login));
+    public_router.merge(protected_router)
 }
 
 async fn admin_disabled_handler() -> ApiErrorResponse {
